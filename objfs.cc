@@ -22,11 +22,21 @@
    64 (or maybe 48)
 */
 
+//#define FUSE_USE_VERSION 27
+//#define _FILE_OFFSET_BITS 64
+
 #include <stdint.h>
 #include <sys/stat.h>
 #include <map>
 #include <unordered_map>
 #include <string>
+#include <vector>
+#include <sstream>
+#include <errno.h>
+//#include <fuse.h>
+
+typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
+                                const struct stat *stbuf, off_t off);
 
 /**********************************
  * Yet another extent map...
@@ -158,12 +168,12 @@ public:
     uint32_t        mode;
     uint32_t        uid, gid;
     uint32_t        rdev;
+    int64_t         size;
     struct timespec mtime;
 };
 
 class fs_file : public fs_obj {
 public:
-    int64_t size;
     extmap  extents;
 };
   
@@ -200,7 +210,6 @@ struct log_inode {
     uint32_t        uid, gid;
     uint32_t        rdev;
     struct timespec mtime;
-    int64_t         size;
 };
 
 /* truncate a file. maybe require truncate->0 before delete?
@@ -295,27 +304,29 @@ int do_log_inode(log_inode *in)
 	if (S_ISDIR(in->mode)) {
 	    fs_directory *d = new fs_directory;
 	    d->type = OBJ_DIR;
+	    d->size = 0;
 	    inode_map[in->inum] = d;
 	    update_inode(d, in);
 	}
 	else if (S_ISREG(in->mode)) {
 	    fs_file *f = new fs_file;
 	    f->type = OBJ_FILE;
-	    update_inode(f, in);
 	    f->size = 0;
+	    update_inode(f, in);
 	    inode_map[in->inum] = f;
 	}
 	else if (S_ISLNK(in->mode)) {
 	    fs_symlink *s = new fs_symlink;
 	    s->type = OBJ_SYMLINK;
 	    update_inode(s, in);
-	    s->target = nullptr;
+	    s->size = 0;
 	    inode_map[in->inum] = s;
 	}
 	else {
 	    fs_obj *o = new fs_obj;
 	    o->type = OBJ_OTHER;
 	    update_inode(o, in);
+	    o->size = 0;
 	    inode_map[in->inum] = o;
 	}
     }
@@ -456,3 +467,133 @@ size_t read_hdr(void *data, size_t len)
     return 0;
 }
 
+
+std::vector<std::string> split(const std::string& s, char delimiter)
+{
+    std::vector<std::string> tokens;
+    std::string token;
+    std::istringstream tokenStream(s);
+    while (std::getline(tokenStream, token, delimiter)) {
+	if (token != "")
+	    tokens.push_back(token);
+    }
+    return tokens;
+}
+
+// returns inode number or -ERROR
+// kind of conflicts with uint32_t for inode #...
+//
+int path_2_inum(const char *path)
+{
+    auto pathvec = split(path, '/');
+    uint32_t inum = 1;
+
+    for (auto it = pathvec.begin(); it != pathvec.end(); it++) {
+	if (inode_map.find(inum) == inode_map.end())
+	    return -ENOENT;
+	fs_obj *obj = inode_map[inum];
+	if (obj->type != OBJ_DIR)
+	    return -ENOTDIR;
+	fs_directory *dir = (fs_directory*) obj;
+	if (dir->dirents.find(*it) == dir->dirents.end())
+	    return -ENOENT;
+	inum = dir->dirents[*it];
+    }
+    
+    return inum;
+}
+
+void obj_2_stat(struct stat *sb, fs_obj *in)
+{
+    memset(sb, 0, sizeof(*sb));
+    sb->st_mode = in->mode;
+    sb->st_nlink = 1;
+    sb->st_uid = in->uid;
+    sb->st_gid = in->gid;
+    sb->st_size = in->size;
+    sb->st_blocks = (in->size + 4095) / 4096;
+    sb->st_atimespec = sb->st_mtimespec =
+	sb->st_ctimespec = in->mtime;
+}
+
+int fs_getattr(const char *path, struct stat *sb)
+{
+    int inum = path_2_inum(path);
+    if (inum < 0)
+	return inum;
+
+    fs_obj *obj = inode_map[inum];
+    obj_2_stat(sb, obj);
+
+    return 0;
+}
+
+int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
+                       off_t offset, struct fuse_file_info *fi)
+{
+    int inum = path_2_inum(path);
+    if (inum < 0)
+	return inum;
+
+    fs_obj *obj = inode_map[inum];
+    if (obj->type != OBJ_DIR)
+	return -ENOTDIR;
+    
+    fs_directory *dir = (fs_directory*)obj;
+    for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
+	struct stat sb;
+	auto [name, i] = *it;
+	fs_obj *o = inode_map[i];
+	obj_2_stat(&sb, o);
+	filler(ptr, const_cast<char*>(name.c_str()), &sb, 0);
+    }
+
+    return 0;
+}
+
+// need to learn how to use std::smart_ptr
+
+int read_data(void *buf, int index, off_t offset, size_t len)
+{
+    return 0;
+}
+
+int fs_read(const char *path, char *buf, size_t len, off_t offset,
+            struct fuse_file_info *fi)
+{
+    int inum = path_2_inum(path);
+    if (inum < 0)
+	return inum;
+
+    fs_obj *obj = inode_map[inum];
+    if (obj->type != OBJ_FILE)
+	return -ENOTDIR;
+    fs_file *f = (fs_file*)obj;
+
+    size_t bytes = 0;
+    for (auto it = f->extents.lookup(offset); len > 0 && it != f->extents.end(); it++) {
+	auto [base, e] = *it;
+	if (base > offset) {
+	    // yow, not supposed to have holes
+	    size_t skip = base-offset;
+	    if (skip > len)
+		skip = len;
+	    bytes += skip;
+	    offset += skip;
+	    buf += skip;
+	}
+	else {
+	    size_t skip = offset - base;
+	    size_t _len = e.len - skip;
+	    if (_len > len)
+		_len = len;
+	    if (read_data(buf, e.objnum, e.offset+skip, _len) < 0)
+		return -EIO;
+	    bytes += _len;
+	    offset += _len;
+	    buf += _len;
+	}
+    }
+
+    return bytes;
+}
