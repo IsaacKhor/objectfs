@@ -153,7 +153,7 @@ enum obj_type {
 
 class fs_obj {
 public:
-    int8_t type;
+    int8_t          type;
     uint32_t        inum;
     uint32_t        mode;
     uint32_t        uid, gid;
@@ -227,10 +227,11 @@ struct log_symlink {
  * destination parent directory.
  */
 struct log_rename {
+    uint32_t inum;		// of entity to rename
     uint32_t parent1;		// inode number (source)
     uint32_t parent2;		//              (dest)
-    uint32_t inum;		// of entity to rename
-    uint8_t  namelen;
+    uint8_t  name1_len;
+    uint8_t  name2_len;
     char     name[];
 };
 
@@ -287,7 +288,7 @@ int do_log_inode(log_inode *in)
 {
     auto it = inode_map.find(in->inum);
     if (it != inode_map.end()) {
-	auto &[inum, obj] = *it;
+	auto obj = inode_map[in->inum];
 	update_inode(obj, in);
     }
     else {
@@ -327,9 +328,10 @@ int do_log_trunc(log_trunc *tr)
     if (it == inode_map.end())
 	return -1;
 
-//    auto f = dynamic_cast<fs_file*>(inode_map[tr->inum]);
     fs_file *f = (fs_file*)(inode_map[tr->inum]);
-
+    if (f->size < tr->new_size)
+	return -1;
+    
     while (true) {
 	auto it = f->extents.lookup(tr->new_size);
 	if (it == f->extents.end())
@@ -366,13 +368,44 @@ int do_log_delete(log_delete *rm)
     return 0;
 }
 
+// assume the inode has already been created
+//
 int do_log_symlink(log_symlink *sl)
 {
+    if (inode_map.find(sl->inum) == inode_map.end())
+	return -1;
+
+    fs_symlink *s = (fs_symlink *)(inode_map[sl->inum]);
+    s->target = std::string(sl->data, sl->len);
+    
     return 0;
 }
 
+// all inodes must exist
+//
 int do_log_rename(log_rename *mv)
 {
+    if (inode_map.find(mv->parent1) == inode_map.end())
+	return -1;
+    if (inode_map.find(mv->parent2) == inode_map.end())
+	return -1;
+    
+    fs_directory *parent1 = (fs_directory*)(inode_map[mv->parent1]);
+    fs_directory *parent2 = (fs_directory*)(inode_map[mv->parent2]);
+
+    auto name1 = std::string(&mv->name[0], mv->name1_len);
+    auto name2 = std::string(&mv->name[mv->name1_len], mv->name2_len);
+
+    if (parent1->dirents.find(name1) == parent1->dirents.end())
+	return -1;
+    if (parent1->dirents[name1] != mv->inum)
+	return -1;
+    if (parent2->dirents.find(name2) != parent1->dirents.end())
+	return -1;
+	    
+    parent1->dirents.erase(name1);
+    parent2->dirents[name2] = mv->inum;
+    
     return 0;
 }
 
