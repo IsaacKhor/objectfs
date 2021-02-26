@@ -40,6 +40,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <algorithm>
+#include <time.h>
 
 typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
                                 const struct stat *stbuf, off_t off);
@@ -224,6 +225,8 @@ struct log_trunc {
     uint32_t inum;
     int64_t  new_size;		// must be <= existing
 };
+
+// need a log_create
 
 struct log_delete {
     uint32_t parent;
@@ -510,9 +513,8 @@ static std::vector<std::string> split(const std::string& s, char delimiter)
 // returns inode number or -ERROR
 // kind of conflicts with uint32_t for inode #...
 //
-static int path_2_inum(const char *path)
+static int vec_2_inum(std::vector<std::string> pathvec)
 {
-    auto pathvec = split(path, '/');
     uint32_t inum = 1;
 
     for (auto it = pathvec.begin(); it != pathvec.end(); it++) {
@@ -528,6 +530,12 @@ static int path_2_inum(const char *path)
     }
     
     return inum;
+}
+
+static int path_2_inum(const char *path)
+{
+    auto pathvec = split(path, '/');
+    return vec_2_inum(pathvec);
 }
 
 static void obj_2_stat(struct stat *sb, fs_obj *in)
@@ -612,7 +620,8 @@ size_t meta_offset(void)
     return (char*)meta_log_tail - (char*)meta_log_head;
 }
     
-std::set<std::shared_ptr<fs_obj>> dirty_inodes;
+//std::set<std::shared_ptr<fs_obj>> dirty_inodes;
+std::set<fs_obj*> dirty_inodes;
 
 int this_index;
 
@@ -682,8 +691,44 @@ int fs_write(const char *path, const char *buf, size_t len,
     extent e = {.objnum = this_index,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
     f->extents.update(offset, e);
-
+    dirty_inodes.insert(f);
+    
     return len;
+}
+
+int next_inode = 2;
+
+// only called for regular files
+int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+    auto pathvec = split(path, '/');
+    if (vec_2_inum(pathvec) >= 0)
+	return -EEXIST;
+
+    // FIX UID,GID
+    
+    auto leaf = pathvec.back();
+    pathvec.pop_back();
+    int parent_inum = vec_2_inum(pathvec);
+    if (parent_inum < 0)
+	return parent_inum;
+    fs_directory *dir = (fs_directory*)inode_map[parent_inum];
+    
+    int inum = next_inode++;
+    fs_file *f = new fs_file;
+    f->type = OBJ_FILE;
+    f->inum = inum;
+    f->mode = mode;
+    f->uid = f->gid = f->rdev = f->size = 0;
+    clock_gettime(CLOCK_REALTIME, &f->mtime);
+
+    inode_map[inum] = f;
+    dir->dirents[leaf] = inum;
+
+    dirty_inodes.insert(f);
+    // ADD LOG_CREATE RECORD
+
+    return 0;
 }
 
 // https://docs.microsoft.com/en-us/cpp/cpp/how-to-create-and-use-shared-ptr-instances?view=msvc-160
@@ -732,12 +777,30 @@ int get_fd(int index)
     return fd;
 }
 
+std::map<int,int> data_offsets;
+
+int get_offset(int index)
+{
+    if (data_offsets.find(index) != data_offsets.end())
+	return data_offsets[index];
+
+    int fd = get_fd(index);	// I should think about exceptions...
+    if (fd < 0)
+	return -1;
+    
+    obj_header h;
+    size_t len = pread(fd, &h, sizeof(h), 0);
+    if (len < 0)
+	return -1;
+
+    data_offsets[index] = h.hdr_len;
+    return h.hdr_len;
+}
+    
 int read_data(void *buf, int index, off_t offset, size_t len)
 {
     if (index == this_index) {
-	int llen = data_offset() - index;
-	if (llen < len)
-	    len = llen;
+	len = std::min(len, data_offset() - index);
 	memcpy(buf, offset + (char*)data_log_head, len);
 	return len;
     }
@@ -746,8 +809,11 @@ int read_data(void *buf, int index, off_t offset, size_t len)
     if (fd < 0)
 	return -1;
 
-    // ++++++++****** need to adjust for header offset
-    return pread(fd, buf, len, offset);
+    size_t data_offset = get_offset(index);
+    if (data_offset < 0)
+	return data_offset;
+    
+    return pread(fd, buf, len, offset + data_offset);
 }
 
 
@@ -764,7 +830,8 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     fs_file *f = (fs_file*)obj;
 
     size_t bytes = 0;
-    for (auto it = f->extents.lookup(offset); len > 0 && it != f->extents.end(); it++) {
+    for (auto it = f->extents.lookup(offset);
+	 len > 0 && it != f->extents.end(); it++) {
 	auto [base, e] = *it;
 	if (base > offset) {
 	    // yow, not supposed to have holes
