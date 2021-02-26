@@ -31,9 +31,15 @@
 #include <unordered_map>
 #include <string>
 #include <vector>
+#include <set>
 #include <sstream>
 #include <errno.h>
 //#include <fuse.h>
+#include <queue>
+#include <memory>
+#include <unistd.h>
+#include <fcntl.h>
+#include <algorithm>
 
 typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
                                 const struct stat *stbuf, off_t off);
@@ -195,8 +201,8 @@ public:
 */
 struct log_data {
     uint32_t inum;		// is 32 enough?
-    uint32_t file_offset;	// in bytes
     uint32_t obj_offset;	// bytes from start of file data
+    int64_t  file_offset;	// in bytes
     int64_t  size;		// file size after this write
     uint32_t len;		// bytes
 };
@@ -250,6 +256,7 @@ enum log_rec_type {
     LOG_DELETE,
     LOG_SYMLNK,
     LOG_RENAME,
+    LOG_DATA,
     LOG_NULL			// fill space for alignment
 };
 
@@ -283,7 +290,7 @@ std::unordered_map<uint32_t, fs_obj*>    inode_map;
     struct timespec mtime;
     int64_t         size;
  */
-void update_inode(fs_obj *obj, log_inode *in)
+static void update_inode(fs_obj *obj, log_inode *in)
 {
     obj->inum = in->inum;
     obj->mode = in->mode;
@@ -293,7 +300,7 @@ void update_inode(fs_obj *obj, log_inode *in)
     obj->mtime = in->mtime;
 }
 
-int do_log_inode(log_inode *in)
+static int read_log_inode(log_inode *in)
 {
     auto it = inode_map.find(in->inum);
     if (it != inode_map.end()) {
@@ -333,7 +340,7 @@ int do_log_inode(log_inode *in)
     return 0;
 }
 
-int do_log_trunc(log_trunc *tr)
+static int read_log_trunc(log_trunc *tr)
 {
     auto it = inode_map.find(tr->inum);
     if (it == inode_map.end())
@@ -360,9 +367,26 @@ int do_log_trunc(log_trunc *tr)
     return 0;
 }
 
+int read_log_data(int idx, log_data *d)
+{
+    auto it = inode_map.find(d->inum);
+    if (it == inode_map.end())
+	return -1;
+
+    fs_file *f = (fs_file*) inode_map[d->inum];
+    
+    // optimization - check if it extends the previous record?
+    extent e = {.objnum = idx, .offset = d->obj_offset,
+		.len = d->len};
+    f->extents.update(d->file_offset, e);
+    f->size = d->size;
+
+    return 0;
+}
+
 // assume directory has been emptied or file has been truncated.
 //
-int do_log_delete(log_delete *rm)
+static int read_log_delete(log_delete *rm)
 {
     if (inode_map.find(rm->parent) == inode_map.end())
 	return -1;
@@ -381,7 +405,7 @@ int do_log_delete(log_delete *rm)
 
 // assume the inode has already been created
 //
-int do_log_symlink(log_symlink *sl)
+static int read_log_symlink(log_symlink *sl)
 {
     if (inode_map.find(sl->inum) == inode_map.end())
 	return -1;
@@ -394,7 +418,7 @@ int do_log_symlink(log_symlink *sl)
 
 // all inodes must exist
 //
-int do_log_rename(log_rename *mv)
+static int read_log_rename(log_rename *mv)
 {
     if (inode_map.find(mv->parent1) == inode_map.end())
 	return -1;
@@ -423,7 +447,7 @@ int do_log_rename(log_rename *mv)
 // returns 0 on success, bytes to read if not enough data,
 // -1 if bad format. Must pass at least 32B
 //
-size_t read_hdr(void *data, size_t len)
+static size_t read_hdr(int idx, void *data, size_t len)
 {
     obj_header *oh = (obj_header*)data;
     if (oh->hdr_len > len)
@@ -437,24 +461,27 @@ size_t read_hdr(void *data, size_t len)
 
     while (rec < end) {
 	switch (rec->type) {
+	case LOG_DATA:
+	    if (read_log_data(idx, (log_data*)&rec->data[0]) < 0)
+		return -1;
 	case LOG_INODE:
-	    if (do_log_inode((log_inode*)&rec->data[0]) < 0)
+	    if (read_log_inode((log_inode*)&rec->data[0]) < 0)
 		return -1;
 	    break;
 	case LOG_TRUNC:
-	    if (do_log_trunc((log_trunc*)&rec->data[0]) < 0)
+	    if (read_log_trunc((log_trunc*)&rec->data[0]) < 0)
 		return -1;
 	    break;
 	case LOG_DELETE:
-	    if (do_log_delete((log_delete*)&rec->data[0]) < 0)
+	    if (read_log_delete((log_delete*)&rec->data[0]) < 0)
 		return -1;
 	    break;
 	case LOG_SYMLNK:
-	    if (do_log_symlink((log_symlink*)&rec->data[0]) < 0)
+	    if (read_log_symlink((log_symlink*)&rec->data[0]) < 0)
 		return -1;
 	    break;
 	case LOG_RENAME:
-	    if (do_log_rename((log_rename*)&rec->data[0]) < 0)
+	    if (read_log_rename((log_rename*)&rec->data[0]) < 0)
 		return -1;
 	    break;
 	case LOG_NULL:
@@ -468,7 +495,7 @@ size_t read_hdr(void *data, size_t len)
 }
 
 
-std::vector<std::string> split(const std::string& s, char delimiter)
+static std::vector<std::string> split(const std::string& s, char delimiter)
 {
     std::vector<std::string> tokens;
     std::string token;
@@ -483,7 +510,7 @@ std::vector<std::string> split(const std::string& s, char delimiter)
 // returns inode number or -ERROR
 // kind of conflicts with uint32_t for inode #...
 //
-int path_2_inum(const char *path)
+static int path_2_inum(const char *path)
 {
     auto pathvec = split(path, '/');
     uint32_t inum = 1;
@@ -503,7 +530,7 @@ int path_2_inum(const char *path)
     return inum;
 }
 
-void obj_2_stat(struct stat *sb, fs_obj *in)
+static void obj_2_stat(struct stat *sb, fs_obj *in)
 {
     memset(sb, 0, sizeof(*sb));
     sb->st_mode = in->mode;
@@ -516,7 +543,7 @@ void obj_2_stat(struct stat *sb, fs_obj *in)
 	sb->st_ctimespec = in->mtime;
 }
 
-int fs_getattr(const char *path, struct stat *sb)
+static int fs_getattr(const char *path, struct stat *sb)
 {
     int inum = path_2_inum(path);
     if (inum < 0)
@@ -528,8 +555,8 @@ int fs_getattr(const char *path, struct stat *sb)
     return 0;
 }
 
-int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
-                       off_t offset, struct fuse_file_info *fi)
+static int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
+		      off_t offset, struct fuse_file_info *fi)
 {
     int inum = path_2_inum(path);
     if (inum < 0)
@@ -551,15 +578,181 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
     return 0;
 }
 
-// need to learn how to use std::smart_ptr
+
+// -------------------------------
+
+/* 
+   how is write going to work? keep the following:
+   - buffer to hold log headers
+   - buffer to hold data
+   - set of dirty inodes
+
+   when do we decide to write? 
+   (1) When we get to a fixed object size
+   (2) when we get an fsync (maybe)
+   (3) on timeout (working on it...)
+       (need a reader/writer lock for this one?)
+ */
+
+void  *meta_log_head;
+void  *meta_log_tail;
+size_t meta_log_len;
+
+void  *data_log_head;
+void  *data_log_tail;
+size_t data_log_len;
+
+size_t data_offset(void)
+{
+    return (char*)data_log_tail - (char*)data_log_head;
+}
+
+size_t meta_offset(void)
+{
+    return (char*)meta_log_tail - (char*)meta_log_head;
+}
+    
+std::set<std::shared_ptr<fs_obj>> dirty_inodes;
+
+int this_index;
+
+void init_stuff(void)
+{
+    meta_log_len = 64 * 1024;
+    meta_log_head = meta_log_tail = malloc(meta_log_len*2);
+
+    data_log_len = 8 * 1024 * 1024;
+    data_log_head = data_log_tail = malloc(data_log_len);
+}
+
+
+void write_everything_out(void)
+{
+    meta_log_tail = meta_log_head;
+    data_log_tail = data_log_head;
+}
+
+void make_record(const void *hdr, size_t hdrlen,
+		 const void *data, size_t datalen)
+{
+    if ((meta_offset() + hdrlen > meta_log_len) ||
+	(data_offset() + datalen > data_log_len))
+	write_everything_out();
+
+    memcpy(meta_log_tail, hdr, hdrlen);
+    meta_log_tail = hdrlen + (char*)meta_log_tail;
+    if (datalen > 0) {
+	memcpy(data_log_tail, data, datalen);
+	data_log_tail = datalen + (char*)data_log_tail;
+    }
+}
+
+int fs_write(const char *path, const char *buf, size_t len,
+	     off_t offset, struct fuse_file_info *fi)
+{
+    int inum = path_2_inum(path);
+    if (inum < 0)
+	return inum;
+
+    fs_obj *obj = inode_map[inum];
+    if (obj->type != OBJ_FILE)
+	return -EISDIR;
+
+    fs_file *f = (fs_file*)obj;
+    off_t new_size = std::max((off_t)(offset+len), (off_t)(f->size));
+    size_t obj_offset = data_offset();
+
+    int hdr_bytes = sizeof(log_record) + sizeof(log_data);
+    char hdr[hdr_bytes];
+    log_record *lr = (log_record*) hdr;
+    log_data *ld = (log_data*) lr->data;
+
+    lr->type = LOG_DATA;
+    lr->len = sizeof(log_data);
+
+    *ld = (log_data) { .inum = (uint32_t)inum,
+		       .file_offset = (int64_t)offset,
+		       .obj_offset = (uint32_t)obj_offset,
+		       .size = (int64_t)new_size,
+		       .len = (uint32_t)len };
+
+    make_record((void*)hdr, hdr_bytes, buf, len);
+
+    // optimization - check if it extends the previous record?
+    extent e = {.objnum = this_index,
+		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
+    f->extents.update(offset, e);
+
+    return len;
+}
+
+// https://docs.microsoft.com/en-us/cpp/cpp/how-to-create-and-use-shared-ptr-instances?view=msvc-160
+// not hugely useful here, but good exercise for later
+
+class openfile {
+public:
+    int index;
+    int fd;
+};
+
+std::map<int,std::shared_ptr<openfile>> fd_cache;
+std::queue<std::shared_ptr<openfile>> fd_fifo;
+#define MAX_OPEN_FDS 50
+char *file_prefix;
+
+int get_fd(int index)
+{
+    // hit?
+    if (fd_cache.find(index) != fd_cache.end()) {
+	auto of = fd_cache[index];
+	return of->fd;
+    }
+
+    // evict?
+    if (fd_fifo.size() >= MAX_OPEN_FDS) {
+	auto of = fd_fifo.front();
+	close(of->fd);
+	fd_cache.erase(of->index);
+	fd_fifo.pop();
+    }
+
+    // open a new one
+    char buf[256];
+    sprintf(buf, "%s.%08x", file_prefix, index);
+    int fd = open(buf, O_RDONLY);
+    if (fd < 0)
+	return -1;
+    
+    auto of = std::make_shared<openfile>();
+    of->index = index;
+    of->fd = fd;
+    fd_cache[index] = of;
+    fd_fifo.push(of);
+
+    return fd;
+}
 
 int read_data(void *buf, int index, off_t offset, size_t len)
 {
-    return 0;
+    if (index == this_index) {
+	int llen = data_offset() - index;
+	if (llen < len)
+	    len = llen;
+	memcpy(buf, offset + (char*)data_log_head, len);
+	return len;
+    }
+    
+    int fd = get_fd(index);
+    if (fd < 0)
+	return -1;
+
+    // ++++++++****** need to adjust for header offset
+    return pread(fd, buf, len, offset);
 }
 
+
 int fs_read(const char *path, char *buf, size_t len, off_t offset,
-            struct fuse_file_info *fi)
+	    struct fuse_file_info *fi)
 {
     int inum = path_2_inum(path);
     if (inum < 0)
@@ -597,3 +790,54 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 
     return bytes;
 }
+
+
+
+/*
+do_log_inode(
+do_log_trunc(
+do_log_delete(
+do_log_symlink(
+do_log_rename(
+*/
+
+#include <sys/statvfs.h>
+
+/* once we're tracking objects I can iterate over them
+ */
+int fs_statfs(const char *path, struct statvfs *st)
+{
+    st->f_bsize = 4096;
+    st->f_blocks = 0;
+    st->f_bfree = 0;
+    st->f_bavail = 0;
+    st->f_namemax = 255;
+
+    return 0;
+}
+
+int fs_fsync(const char * path, int, struct fuse_file_info *fi)
+{
+    return 0;
+}
+
+#if 0
+struct fuse_operations fs_ops = {
+    .init = fs_init,
+    .getattr = fs_getattr,
+    .readdir = fs_readdir,
+    .create = fs_create,
+    .mkdir = fs_mkdir,
+    .unlink = fs_unlink,
+    .rmdir = fs_rmdir,
+    .rename = fs_rename,
+    .chmod = fs_chmod,
+    .utime = fs_utime,
+    .truncate = fs_truncate,
+    .read = fs_read,
+    .write = fs_write,
+    .statfs = fs_statfs,
+//    .fsync = fs_fsync,
+    
+};
+#endif
