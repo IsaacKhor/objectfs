@@ -68,6 +68,8 @@ class fuse_context(Structure):
                 ("_pad1", c_char * 4),	# 36 -> 40
                 ]
 
+null_fi = fuse_file_info()
+
 dir = os.getcwd()
 lib = CDLL(dir + "/libobjfs.so")
 assert lib
@@ -93,54 +95,54 @@ dir_max = 128
 def readdir(path):
     des = (dirent * dir_max)()
     n = c_int(dir_max)
-    val = lib.fs_readdir(xbytes(path), byref(n), byref(des), byref(null_fi))
+    val = lib.py_readdir(xbytes(path), byref(n), byref(des), byref(null_fi))
     if val >= 0:
         return val, des[0:n.value]
     else:
         return val, []
 
 def create(path, mode):
-    retval = lib.fs_create(path, c_int(mode), byref(null_fi))
+    retval = lib.py_create(path, c_int(mode), byref(null_fi))
     return retval
 
 def mkdir(path, mode):
-    retval = lib.fs_mkdir(path, c_int(mode))
+    retval = lib.py_mkdir(path, c_int(mode))
     return retval
 
 def truncate(path, offset):
-    retval = lib.fs_truncate(path, c_int(offset))
+    retval = lib.py_truncate(path, c_int(offset))
     return retval
 
 def unlink(path):
-    retval = lib.fs_unlink(path)
+    retval = lib.py_unlink(path)
     return retval
 
 def rmdir(path):
-    retval = lib.fs_rmdir(path)
+    retval = lib.py_rmdir(path)
     return retval
 
 def rename(path1, path2):
-    retval = lib.fs_rename(path1, path2)
+    retval = lib.py_rename(path1, path2)
     return retval
 
 def chmod(path, mode):
-    retval = lib.fs_chmod(path, c_int(mode))
+    retval = lib.py_chmod(path, c_int(mode))
     return retval
 
 def utime(path, actime, modtime):
-    retval = lib.fs_utime(path, c_int(actime), c_int(modtime))
+    retval = lib.py_utime(path, c_int(actime), c_int(modtime))
     return retval
 
 def read(path, len, offset):
     buf = (c_char * len)()
-    val = lib.fs_read(xbytes(path), buf, c_int(len), c_int(offset), byref(null_fi))
+    val = lib.py_read(xbytes(path), buf, c_int(len), c_int(offset), byref(null_fi))
     if val < 0:
         return val,''
     return val, buf[0:val]
 
 def write(path, data, offset):
     nbytes = len(data)
-    val = lib.fs_write(path, xbytes(data), c_int(nbytes),
+    val = lib.py_write(path, xbytes(data), c_int(nbytes),
                                c_int(offset), byref(null_fi))
     return val
 

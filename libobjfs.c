@@ -52,14 +52,13 @@ static int filler(void *buf, const char *name, const struct stat *sb, off_t off)
     return 0;
 }
 
-int py_readdir(const char *path, int n, struct dirent *de,
+int py_readdir(const char *path, int *n, struct dirent *de,
                struct fuse_file_info *fi)
 {
-    struct dir_state ds = {.max = n, .i = 0, .de = de};
+    struct dir_state ds = {.max = *n, .i = 0, .de = de};
     int val = fs_readdir(path, &ds, filler, 0, fi);
-    if (val < 0)
-        return val;
-    return ds.i;
+    *n = ds.i;
+    return val;
 }
 
 int py_create(const char *path, unsigned int mode, struct fuse_file_info *fi)

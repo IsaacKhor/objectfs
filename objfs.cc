@@ -65,6 +65,7 @@ extern "C" int fs_fsync(const char * path, int, struct fuse_file_info *fi);
 extern "C" int fs_truncate(const char *path, off_t len);
 extern "C" int initialize(const char*);
 extern "C" int mkfs(const char*);
+extern "C" void sync(void);
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -500,7 +501,8 @@ size_t read_hdr(int idx, void *data, size_t len)
     if (oh->magic != OBJFS_MAGIC || oh->version != 1 || oh->type != 1)
 	return -1;
 
-    log_record *end = (log_record*)&oh->data[oh->hdr_len];
+    size_t meta_bytes = oh->hdr_len - sizeof(obj_header);
+    log_record *end = (log_record*)&oh->data[meta_bytes];
     log_record *rec = (log_record*)&oh->data[0];
 
     while (rec < end) {
@@ -658,6 +660,11 @@ void write_everything_out(void)
     
     meta_log_tail = meta_log_head;
     data_log_tail = data_log_head;
+}
+
+void sync(void)
+{
+    write_everything_out();
 }
 
 void make_record(const void *hdr, size_t hdrlen,
@@ -1330,7 +1337,7 @@ int initialize(const char *prefix)
     init_stuff(prefix);
     
     for (int i = 0; ; i++) {
-	size_t offset = get_offset(i);
+	ssize_t offset = get_offset(i);
 	if (offset < 0)
 	    return 0;
 	void *buf = malloc(offset);
