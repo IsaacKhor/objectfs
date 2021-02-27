@@ -354,7 +354,25 @@ static int read_log_inode(log_inode *in)
     return 0;
 }
 
-static int read_log_trunc(log_trunc *tr)
+void do_trunc(fs_file *f, off_t new_size)
+{
+    while (true) {
+	auto it = f->extents.lookup(new_size);
+	if (it == f->extents.end())
+	    break;
+	auto [offset, e] = *it;
+	if (offset < new_size) {
+	    e.len = new_size - offset;
+	    f->extents.update(offset, e);
+	}
+	else {
+	    f->extents.erase(offset);
+	}
+    }
+    f->size = new_size;
+}
+
+int read_log_trunc(log_trunc *tr)
 {
     auto it = inode_map.find(tr->inum);
     if (it == inode_map.end())
@@ -363,21 +381,8 @@ static int read_log_trunc(log_trunc *tr)
     fs_file *f = (fs_file*)(inode_map[tr->inum]);
     if (f->size < tr->new_size)
 	return -1;
-    
-    while (true) {
-	auto it = f->extents.lookup(tr->new_size);
-	if (it == f->extents.end())
-	    break;
-	auto [offset, e] = *it;
-	if (offset < tr->new_size) {
-	    e.len = tr->new_size - offset;
-	    f->extents.update(offset, e);
-	}
-	else {
-	    f->extents.erase(offset);
-	}
-    }
-    f->size = tr->new_size;
+
+    do_trunc(f, tr->new_size);
     return 0;
 }
 
@@ -773,16 +778,63 @@ int fs_mkdir(const char *path, mode_t mode)
 #endif
     
     inode_map[inum] = dir;
-    dir->dirents[leaf] = inum;
-
+    parent->dirents[leaf] = inum;
+    clock_gettime(CLOCK_REALTIME, &parent->mtime);
+    dirty_inodes.insert(parent);
+    
     write_inode(dir);		// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
 
     return 0;
 }
 
-// only called for regular files
-int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+void do_log_delete(uint32_t parent_inum, uint32_t inum, std::string name)
+{
+    size_t len = sizeof(log_record) + sizeof(log_delete) + name.length();
+    char buf[len];
+    log_record *rec = (log_record*) buf;
+    log_delete *del = (log_delete*) rec->data;
+
+    rec->type = LOG_DELETE;
+    rec->len = sizeof(*del) + name.length();
+    del->parent = parent_inum;
+    del->inum = inum;
+    del->namelen = name.length();
+    memcpy(del->name, (void*)name.c_str(), name.length());
+
+    make_record(rec, len, nullptr, 0);
+}
+
+int fs_rmdir(const char *path)
+{
+    auto pathvec = split(path, '/');
+    int inum = vec_2_inum(pathvec);
+    if (inum < 0)
+	return inum;
+    fs_directory *dir = (fs_directory*)inode_map[inum];
+
+    if (dir->type != OBJ_DIR)
+	return -ENOTDIR;
+    if (!dir->dirents.empty())
+	return -ENOTEMPTY;
+    
+    auto leaf = pathvec.back();
+    pathvec.pop_back();
+    int parent_inum = vec_2_inum(pathvec);
+    if (parent_inum < 0)
+	return parent_inum;
+    fs_directory *parent = (fs_directory*)inode_map[parent_inum];
+
+    parent->dirents.erase(leaf);
+    clock_gettime(CLOCK_REALTIME, &dir->mtime);
+    dirty_inodes.insert(dir);
+    
+    do_log_delete(parent_inum, inum, leaf);
+
+    return 0;
+}
+
+int create_node(const char *path, mode_t mode, int type, dev_t dev)
 {
     auto pathvec = split(path, '/');
     if (vec_2_inum(pathvec) >= 0)
@@ -796,11 +848,12 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
     
     int inum = next_inode++;
-    fs_file *f = new fs_file;
-    f->type = OBJ_FILE;
+    fs_obj *f = new fs_obj;
+    f->type = type;
     f->inum = inum;
     f->mode = mode;
-    f->rdev = f->size = 0;
+    f->rdev = dev;
+    f->size = 0;
     clock_gettime(CLOCK_REALTIME, &f->mtime);
 
 #if 0
@@ -814,6 +867,163 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
     write_inode(f);		// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
+
+    clock_gettime(CLOCK_REALTIME, &dir->mtime);
+    dirty_inodes.insert(dir);
+    
+    return 0;
+}
+
+// only called for regular files
+int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+    return create_node(path, mode, OBJ_FILE, 0);
+}
+
+// for device files, FIFOs, etc.
+int fs_mknod(const char *path, mode_t mode, dev_t dev)
+{
+    return create_node(path, mode, OBJ_OTHER, dev);
+}
+
+void do_log_trunc(uint32_t inum, off_t offset)
+{
+    size_t len = sizeof(log_record) + sizeof(log_trunc);
+    char buf[len];
+    log_record *rec = (log_record*) buf;
+    log_trunc *tr = (log_trunc*) rec->data;
+
+    rec->type = LOG_TRUNC;
+    rec->len = sizeof(*tr);
+    tr->inum = inum;
+    tr->new_size = offset;
+
+    make_record(rec, len, nullptr, 0);
+}
+
+/* do I need a parent inum in fs_obj?
+ */
+int fs_unlink(const char *path)
+{
+    auto pathvec = split(path, '/');
+    int inum = vec_2_inum(pathvec);
+    if (inum < 0)
+	return inum;
+    fs_obj *obj = inode_map[inum];
+
+    auto leaf = pathvec.back();
+    pathvec.pop_back();
+    int parent_inum = vec_2_inum(pathvec);
+    if (parent_inum < 0)
+	return parent_inum;
+    fs_directory *dir = (fs_directory*)inode_map[parent_inum];
+
+    dir->dirents.erase(leaf);
+    clock_gettime(CLOCK_REALTIME, &dir->mtime);
+    dirty_inodes.insert(dir);
+
+    if (obj->type == OBJ_FILE) {
+	fs_file *f = (fs_file*)obj;
+	do_trunc(f, 0);
+	do_log_trunc(inum, 0);
+    }
+    do_log_delete(parent_inum, inum, leaf);
+
+    return 0;
+}
+
+std::tuple<int,int,std::string> path_2_inum2(const char* path)
+{
+    auto pathvec = split(path, '/');
+    int inum = vec_2_inum(pathvec);
+
+    auto leaf = pathvec.back();
+    pathvec.pop_back();
+    int parent_inum = vec_2_inum(pathvec);
+
+    return make_tuple(inum, parent_inum, leaf);
+}
+
+void do_log_rename(int src_inum, int src_parent, int dst_parent,
+		      std::string src_leaf, std::string dst_leaf)
+{
+    int len = sizeof(log_rename) + src_leaf.length() + dst_leaf.length();
+    char buf[sizeof(log_record)+len];
+    log_record *rec = (log_record*)buf;
+    log_rename *mv = (log_rename*)rec->data;
+
+    rec->type = LOG_RENAME;
+    rec->len = len;
+
+    mv->inum = src_inum;
+    mv->parent1 = src_parent;
+    mv->parent2 = dst_parent;
+    mv->name1_len = src_leaf.length();
+    memcpy(mv->name, src_leaf.c_str(), src_leaf.length());
+    mv->name2_len = dst_leaf.length();
+    memcpy(&mv->name[mv->name1_len], dst_leaf.c_str(), dst_leaf.length());
+    
+    make_record(rec, sizeof(log_record)+len, nullptr, 0);
+}
+
+int fs_rename(const char *src_path, const char *dst_path)
+{
+    auto [src_inum, src_parent, src_leaf] = path_2_inum2(src_path);
+    if (src_inum < 0)
+	return src_inum;
+    
+    auto [dst_inum, dst_parent, dst_leaf] = path_2_inum2(dst_path);
+    if (dst_inum >= 0)
+	return -EEXIST;
+    if (dst_parent < 0)
+	return dst_parent;
+
+    fs_directory *srcdir = (fs_directory*)inode_map[src_parent];
+    fs_directory *dstdir = (fs_directory*)inode_map[src_parent];
+
+    if (dstdir->type != OBJ_DIR)
+	return -ENOTDIR;
+
+    srcdir->dirents.erase(src_leaf);
+    clock_gettime(CLOCK_REALTIME, &srcdir->mtime);
+    dirty_inodes.insert(srcdir);
+
+    dstdir->dirents[dst_leaf] = src_inum;
+    clock_gettime(CLOCK_REALTIME, &dstdir->mtime);
+    dirty_inodes.insert(dstdir);
+    
+    do_log_rename(src_inum, src_parent, dst_parent, src_leaf, dst_leaf);
+    
+    return 0;
+}
+
+int fs_chmod(const char *path, mode_t mode)
+{
+    int inum = path_2_inum(path);
+    if (inum < 0)
+	return inum;
+
+    fs_obj *obj = inode_map[inum];
+    obj->mode = mode | (S_IFMT & obj->mode);
+    dirty_inodes.insert(obj);
+
+    return 0;
+}
+
+// see utimensat(2). Oh, and I hate access time...
+//
+int fs_utimens(const char *path, const struct timespec tv[2])
+{
+    int inum = path_2_inum(path);
+    if (inum < 0)
+	return inum;
+
+    fs_obj *obj = inode_map[inum];
+    if (tv == NULL || tv[1].tv_nsec == UTIME_NOW)
+	clock_gettime(CLOCK_REALTIME, &obj->mtime);
+    else if (tv[1].tv_nsec != UTIME_OMIT)
+	obj->mtime = tv[1];
+    dirty_inodes.insert(obj);
 
     return 0;
 }
