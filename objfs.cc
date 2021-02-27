@@ -292,7 +292,6 @@ struct obj_header {
 
 /* until we add metadata objects this is enough global state
  */
-std::unordered_map<std::string, fs_obj*> path_map;
 std::unordered_map<uint32_t, fs_obj*>    inode_map;
 
 
@@ -548,10 +547,40 @@ static int vec_2_inum(std::vector<std::string> pathvec)
     return inum;
 }
 
+std::unordered_map<std::string, int> path_map;
+std::queue<std::string> path_fifo;
+#define MAX_CACHED_PATHS 100
+
 static int path_2_inum(const char *path)
 {
+    if (path_map.find(path) != path_map.end())
+	return path_map[path];
+	     
     auto pathvec = split(path, '/');
-    return vec_2_inum(pathvec);
+    int inum = vec_2_inum(pathvec);
+
+    if (inum >= 0) {
+	if (path_fifo.size() >= MAX_CACHED_PATHS) {
+	    auto old = path_fifo.front();
+	    path_map.erase(old);
+	    path_fifo.pop();
+	}
+	path_map[path] = inum;
+    }
+    
+    return inum;
+}
+
+std::tuple<int,int,std::string> path_2_inum2(const char* path)
+{
+    auto pathvec = split(path, '/');
+    int inum = vec_2_inum(pathvec);
+
+    auto leaf = pathvec.back();
+    pathvec.pop_back();
+    int parent_inum = vec_2_inum(pathvec);
+
+    return make_tuple(inum, parent_inum, leaf);
 }
 
 static void obj_2_stat(struct stat *sb, fs_obj *in)
@@ -753,18 +782,17 @@ void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
 
 int fs_mkdir(const char *path, mode_t mode)
 {
-    auto pathvec = split(path, '/');
-    if (vec_2_inum(pathvec) >= 0)
+    auto [inum, parent_inum, leaf] = path_2_inum2(path);
+    if (inum >= 0)
 	return -EEXIST;
-    
-    auto leaf = pathvec.back();
-    pathvec.pop_back();
-    int parent_inum = vec_2_inum(pathvec);
     if (parent_inum < 0)
 	return parent_inum;
-    fs_directory *parent = (fs_directory*)inode_map[parent_inum];
 
-    int inum = next_inode++;
+    fs_directory *parent = (fs_directory*)inode_map[parent_inum];
+    if (parent->type != OBJ_DIR)
+	return -ENOTDIR;
+    
+    inum = next_inode++;
     fs_directory *dir = new fs_directory;
     dir->type = OBJ_DIR;
     dir->inum = inum;
@@ -807,27 +835,26 @@ void do_log_delete(uint32_t parent_inum, uint32_t inum, std::string name)
 
 int fs_rmdir(const char *path)
 {
-    auto pathvec = split(path, '/');
-    int inum = vec_2_inum(pathvec);
-    if (inum < 0)
-	return inum;
-    fs_directory *dir = (fs_directory*)inode_map[inum];
+    auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
+    if (inum < 0)
+	return -ENOENT;
+    if (parent_inum < 0)
+	return parent_inum;
+    
+    fs_directory *dir = (fs_directory*)inode_map[inum];
     if (dir->type != OBJ_DIR)
 	return -ENOTDIR;
     if (!dir->dirents.empty())
 	return -ENOTEMPTY;
     
-    auto leaf = pathvec.back();
-    pathvec.pop_back();
-    int parent_inum = vec_2_inum(pathvec);
-    if (parent_inum < 0)
-	return parent_inum;
     fs_directory *parent = (fs_directory*)inode_map[parent_inum];
-
+    inode_map.erase(inum);
     parent->dirents.erase(leaf);
-    clock_gettime(CLOCK_REALTIME, &dir->mtime);
-    dirty_inodes.insert(dir);
+    delete dir;
+    
+    clock_gettime(CLOCK_REALTIME, &parent->mtime);
+    dirty_inodes.insert(parent);
     
     do_log_delete(parent_inum, inum, leaf);
 
@@ -836,19 +863,17 @@ int fs_rmdir(const char *path)
 
 int create_node(const char *path, mode_t mode, int type, dev_t dev)
 {
-    auto pathvec = split(path, '/');
-    if (vec_2_inum(pathvec) >= 0)
-	return -EEXIST;
+    auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
-    auto leaf = pathvec.back();
-    pathvec.pop_back();
-    int parent_inum = vec_2_inum(pathvec);
+    if (inum >= 0)
+	return -EEXIST;
     if (parent_inum < 0)
 	return parent_inum;
-    fs_directory *dir = (fs_directory*)inode_map[parent_inum];
     
-    int inum = next_inode++;
+    fs_directory *dir = (fs_directory*)inode_map[parent_inum];
+    inum = next_inode++;
     fs_obj *f = new fs_obj;
+
     f->type = type;
     f->inum = inum;
     f->mode = mode;
@@ -905,17 +930,10 @@ void do_log_trunc(uint32_t inum, off_t offset)
  */
 int fs_unlink(const char *path)
 {
-    auto pathvec = split(path, '/');
-    int inum = vec_2_inum(pathvec);
+    auto [inum, parent_inum, leaf] = path_2_inum2(path);
     if (inum < 0)
 	return inum;
     fs_obj *obj = inode_map[inum];
-
-    auto leaf = pathvec.back();
-    pathvec.pop_back();
-    int parent_inum = vec_2_inum(pathvec);
-    if (parent_inum < 0)
-	return parent_inum;
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
 
     dir->dirents.erase(leaf);
@@ -930,18 +948,6 @@ int fs_unlink(const char *path)
     do_log_delete(parent_inum, inum, leaf);
 
     return 0;
-}
-
-std::tuple<int,int,std::string> path_2_inum2(const char* path)
-{
-    auto pathvec = split(path, '/');
-    int inum = vec_2_inum(pathvec);
-
-    auto leaf = pathvec.back();
-    pathvec.pop_back();
-    int parent_inum = vec_2_inum(pathvec);
-
-    return make_tuple(inum, parent_inum, leaf);
 }
 
 void do_log_rename(int src_inum, int src_parent, int dst_parent,
