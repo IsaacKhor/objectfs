@@ -253,6 +253,16 @@ struct log_rename {
     char     name[];
 };
 
+/* create a new name
+ */
+struct log_create {
+    uint32_t  parent_inum;
+    uint32_t  inum;
+    uint8_t   namelen;
+    char      name[];
+};
+
+
 enum log_rec_type {
     LOG_INODE = 1,
     LOG_TRUNC,
@@ -260,7 +270,8 @@ enum log_rec_type {
     LOG_SYMLNK,
     LOG_RENAME,
     LOG_DATA,
-    LOG_NULL			// fill space for alignment
+    LOG_CREATE,
+    LOG_NULL,			// fill space for alignment
 };
 
 struct log_record {
@@ -551,7 +562,7 @@ static void obj_2_stat(struct stat *sb, fs_obj *in)
 	sb->st_ctimespec = in->mtime;
 }
 
-static int fs_getattr(const char *path, struct stat *sb)
+int fs_getattr(const char *path, struct stat *sb)
 {
     int inum = path_2_inum(path);
     if (inum < 0)
@@ -563,7 +574,7 @@ static int fs_getattr(const char *path, struct stat *sb)
     return 0;
 }
 
-static int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
+int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 		      off_t offset, struct fuse_file_info *fi)
 {
     int inum = path_2_inum(path);
@@ -698,6 +709,78 @@ int fs_write(const char *path, const char *buf, size_t len,
 
 int next_inode = 2;
 
+void write_inode(fs_obj *f)
+{
+    size_t len = sizeof(log_record) + sizeof(log_inode);
+    char buf[len];
+    log_record *rec = (log_record*)buf;
+    log_inode *in = (log_inode*)rec->data;
+
+    rec->type = LOG_INODE;
+    rec->len = sizeof(log_inode);
+
+    in->inum = f->inum;
+    in->mode = f->mode;
+    in->uid = f->uid;
+    in->gid = f->gid;
+    in->rdev = f->rdev;
+    in->mtime = f->mtime;
+
+    make_record(rec, len, NULL, 0);
+}
+
+void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
+{
+    size_t len = sizeof(log_record) + sizeof(log_create) + leaf.length();
+    char buf[len];
+    log_record *rec = (log_record*) buf;
+    log_create *cr8 = (log_create*) rec->data;
+
+    rec->type = LOG_CREATE;
+    rec->len = sizeof(*cr8) + leaf.length();
+    cr8->parent_inum = parent_inum;
+    cr8->inum = inum;
+    cr8->namelen = leaf.length();
+    memcpy(cr8->name, (void*)leaf.c_str(), leaf.length());
+
+    make_record(rec, len, nullptr, 0);
+}
+
+int fs_mkdir(const char *path, mode_t mode)
+{
+    auto pathvec = split(path, '/');
+    if (vec_2_inum(pathvec) >= 0)
+	return -EEXIST;
+    
+    auto leaf = pathvec.back();
+    pathvec.pop_back();
+    int parent_inum = vec_2_inum(pathvec);
+    if (parent_inum < 0)
+	return parent_inum;
+    fs_directory *parent = (fs_directory*)inode_map[parent_inum];
+
+    int inum = next_inode++;
+    fs_directory *dir = new fs_directory;
+    dir->type = OBJ_DIR;
+    dir->inum = inum;
+    dir->mode = mode;
+    dir->rdev = dir->size = 0;
+    clock_gettime(CLOCK_REALTIME, &dir->mtime);
+#if 0
+    struct fuse_context *ctx = fuse_get_context();
+    dir->uid = ctx->uid;
+    dir->gid = ctx->gid;
+#endif
+    
+    inode_map[inum] = dir;
+    dir->dirents[leaf] = inum;
+
+    write_inode(dir);		// can't rely on dirty_inodes
+    write_dirent(parent_inum, leaf, inum);
+
+    return 0;
+}
+
 // only called for regular files
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
@@ -705,8 +788,6 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     if (vec_2_inum(pathvec) >= 0)
 	return -EEXIST;
 
-    // FIX UID,GID
-    
     auto leaf = pathvec.back();
     pathvec.pop_back();
     int parent_inum = vec_2_inum(pathvec);
@@ -719,14 +800,20 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     f->type = OBJ_FILE;
     f->inum = inum;
     f->mode = mode;
-    f->uid = f->gid = f->rdev = f->size = 0;
+    f->rdev = f->size = 0;
     clock_gettime(CLOCK_REALTIME, &f->mtime);
 
+#if 0
+    struct fuse_context *ctx = fuse_get_context();
+    in->uid = ctx->uid;
+    in->gid = ctx->gid;
+#endif
+    
     inode_map[inum] = f;
     dir->dirents[leaf] = inum;
 
-    dirty_inodes.insert(f);
-    // ADD LOG_CREATE RECORD
+    write_inode(f);		// can't rely on dirty_inodes
+    write_dirent(parent_inum, leaf, inum);
 
     return 0;
 }
