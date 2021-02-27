@@ -189,7 +189,7 @@ public:
     std::map<std::string,uint32_t> dirents;
 };
 
-class fs_symlink : public fs_obj {
+class fs_link : public fs_obj {
 public:
     std::string target;
 };
@@ -238,7 +238,7 @@ struct log_delete {
 struct log_symlink {
     uint32_t inum;
     uint8_t  len;
-    char     data[];
+    char     target[];
 };
 
 /* cross-directory rename is handled by specifying both source and
@@ -287,6 +287,7 @@ struct obj_header {
     int32_t version;
     int32_t type;		// 1 == data, 2 == metadata
     int32_t hdr_len;
+    int32_t this_index;
     char    data[];
 };
 
@@ -336,7 +337,7 @@ static int read_log_inode(log_inode *in)
 	    inode_map[in->inum] = f;
 	}
 	else if (S_ISLNK(in->mode)) {
-	    fs_symlink *s = new fs_symlink;
+	    fs_link *s = new fs_link;
 	    s->type = OBJ_SYMLINK;
 	    update_inode(s, in);
 	    s->size = 0;
@@ -428,8 +429,8 @@ static int read_log_symlink(log_symlink *sl)
     if (inode_map.find(sl->inum) == inode_map.end())
 	return -1;
 
-    fs_symlink *s = (fs_symlink *)(inode_map[sl->inum]);
-    s->target = std::string(sl->data, sl->len);
+    fs_link *s = (fs_link *)(inode_map[sl->inum]);
+    s->target = std::string(sl->target, sl->len);
     
     return 0;
 }
@@ -669,6 +670,7 @@ size_t meta_offset(void)
 std::set<fs_obj*> dirty_inodes;
 
 int this_index;
+char *file_prefix;
 
 void init_stuff(void)
 {
@@ -679,9 +681,29 @@ void init_stuff(void)
     data_log_head = data_log_tail = malloc(data_log_len);
 }
 
-
 void write_everything_out(void)
 {
+    char path[strlen(file_prefix) + 32];
+    sprintf(path, "%s.%08x", file_prefix, this_index);
+
+    obj_header h = {
+	.magic = OBJFS_MAGIC,
+	.version = 1,
+	.type = 1,
+	.this_index = this_index,
+	.hdr_len = (int)(meta_offset() + sizeof(obj_header)),
+    };
+    this_index++;
+    
+    int fd = open(path, O_WRONLY|O_CREAT, 0777);
+    if (fd < 0)
+	/* ERROR */;
+
+    write(fd, &h, sizeof(h));
+    write(fd, meta_log_head, meta_offset());
+    write(fd, data_log_head, data_offset());
+    close(fd);
+    
     meta_log_tail = meta_log_head;
     data_log_tail = data_log_head;
 }
@@ -871,6 +893,9 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
 	return parent_inum;
     
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
+    if (dir->type != OBJ_DIR)
+	return -ENOTDIR;
+    
     inum = next_inode++;
     fs_obj *f = new fs_obj;
 
@@ -1046,7 +1071,6 @@ public:
 std::map<int,std::shared_ptr<openfile>> fd_cache;
 std::queue<std::shared_ptr<openfile>> fd_fifo;
 #define MAX_OPEN_FDS 50
-char *file_prefix;
 
 int get_fd(int index)
 {
@@ -1157,11 +1181,76 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    buf += _len;
 	}
     }
-
     return bytes;
 }
 
+void write_symlink(int inum, std::string target)
+{
+    size_t len = sizeof(log_symlink) + target.length();
+    char buf[sizeof(log_record) + len];
+    log_record *rec = (log_record*) buf;
+    log_symlink *l = (log_symlink*) rec->data;
 
+    rec->type = LOG_SYMLNK;
+    rec->len = len;
+    l->inum = inum;
+    l->len = target.length();
+    memcpy(l->target, target.c_str(), l->len);
+
+    make_record(rec, sizeof(log_record)+len, nullptr, 0);
+}
+
+int fs_symlink(const char *path, const char *contents)
+{
+    auto [inum, parent_inum, leaf] = path_2_inum2(path);
+    if (inum >= 0)
+	return -EEXIST;
+    if (parent_inum < 0)
+	return parent_inum;
+
+    fs_directory *dir = (fs_directory*)inode_map[parent_inum];
+    if (dir->type != OBJ_DIR)
+	return -ENOTDIR;
+    
+    fs_link *l = new fs_link;
+    l->type = OBJ_SYMLINK;
+    l->inum = next_inode++;
+    l->mode = S_IFLNK | 0777;
+#if 0
+    struct fuse_context *ctx = fuse_get_context();
+    in->uid = ctx->uid;
+    in->gid = ctx->gid;
+#endif
+    clock_gettime(CLOCK_REALTIME, &l->mtime);
+
+    l->target = leaf;
+    inode_map[inum] = l;
+    dir->dirents[leaf] = l->inum;
+
+    write_inode(l);
+    write_symlink(inum, leaf);
+    write_dirent(parent_inum, leaf, inum);
+    
+    clock_gettime(CLOCK_REALTIME, &dir->mtime);
+    dirty_inodes.insert(dir);
+
+    return 0;
+}
+
+int fs_readlink(const char *path, char *buf, size_t len)
+{
+    int inum = path_2_inum(path);
+    if (inum < 0)
+	return inum;
+
+    fs_link *l = (fs_link*)inode_map[inum];
+    if (l->type != OBJ_SYMLINK)
+	return -EINVAL;
+
+    size_t val = std::min(len, l->target.length());
+    memcpy(buf, l->target.c_str(), val);
+    return val;
+}
 
 /*
 do_log_inode(
