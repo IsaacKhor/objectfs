@@ -22,8 +22,8 @@
    64 (or maybe 48)
 */
 
-//#define FUSE_USE_VERSION 27
-//#define _FILE_OFFSET_BITS 64
+#define FUSE_USE_VERSION 27
+#define _FILE_OFFSET_BITS 64
 
 #include <stdint.h>
 #include <sys/stat.h>
@@ -34,16 +34,40 @@
 #include <set>
 #include <sstream>
 #include <errno.h>
-//#include <fuse.h>
+#include <fuse.h>
 #include <queue>
 #include <memory>
 #include <unistd.h>
 #include <fcntl.h>
 #include <algorithm>
 #include <time.h>
+#include <string.h>
 
-typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
-                                const struct stat *stbuf, off_t off);
+extern "C" int fs_getattr(const char *path, struct stat *sb);
+extern "C" int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
+                      off_t offset, struct fuse_file_info *fi);
+extern "C" int fs_write(const char *path, const char *buf, size_t len,
+                    off_t offset, struct fuse_file_info *fi);
+extern "C" int fs_mkdir(const char *path, mode_t mode);
+extern "C" int fs_rmdir(const char *path);
+extern "C" int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi);
+extern "C" int fs_mknod(const char *path, mode_t mode, dev_t dev);
+extern "C" int fs_unlink(const char *path);
+extern "C" int fs_rename(const char *src_path, const char *dst_path);
+extern "C" int fs_chmod(const char *path, mode_t mode);
+extern "C" int fs_utimens(const char *path, const struct timespec tv[2]);
+extern "C" int fs_read(const char *path, char *buf, size_t len, off_t offset,
+                   struct fuse_file_info *fi);
+extern "C" int fs_symlink(const char *path, const char *contents);
+extern "C" int fs_readlink(const char *path, char *buf, size_t len);
+extern "C" int fs_statfs(const char *path, struct statvfs *st);
+extern "C" int fs_fsync(const char * path, int, struct fuse_file_info *fi);
+extern "C" int fs_truncate(const char *path, off_t len);
+extern "C" int initialize(const char*);
+extern "C" int mkfs(const char*);
+
+//typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
+//                                const struct stat *stbuf, off_t off);
 
 /**********************************
  * Yet another extent map...
@@ -280,7 +304,8 @@ struct log_record {
     char data[];
 };
 
-#define OBJFS_MAGIC 0x4f424653	// "OBFS"
+//#define OBJFS_MAGIC 0x4f424653	// "OBFS"
+#define OBJFS_MAGIC 0x5346424f	// "OBFS"
 
 struct obj_header {
     int32_t magic;
@@ -371,7 +396,7 @@ void do_trunc(fs_file *f, off_t new_size)
     }
     f->size = new_size;
 }
-
+    
 int read_log_trunc(log_trunc *tr)
 {
     auto it = inode_map.find(tr->inum);
@@ -469,7 +494,7 @@ static int read_log_rename(log_rename *mv)
 size_t read_hdr(int idx, void *data, size_t len)
 {
     obj_header *oh = (obj_header*)data;
-    if (oh->hdr_len > len)
+    if ((size_t)(oh->hdr_len) > len)
 	return oh->hdr_len;
 
     if (oh->magic != OBJFS_MAGIC || oh->version != 1 || oh->type != 1)
@@ -591,8 +616,9 @@ size_t meta_offset(void)
 //std::set<std::shared_ptr<fs_obj>> dirty_inodes;
 std::set<fs_obj*> dirty_inodes;
 
-void init_stuff(void)
+void init_stuff(const char *prefix)
 {
+    file_prefix = strdup(prefix);
     meta_log_len = 64 * 1024;
     meta_log_head = meta_log_tail = malloc(meta_log_len*2);
 
@@ -616,8 +642,8 @@ void write_everything_out(void)
 	.magic = OBJFS_MAGIC,
 	.version = 1,
 	.type = 1,
-	.this_index = this_index,
 	.hdr_len = (int)(meta_offset() + sizeof(obj_header)),
+	.this_index = this_index,
     };
     this_index++;
     
@@ -767,8 +793,7 @@ static void obj_2_stat(struct stat *sb, fs_obj *in)
     sb->st_gid = in->gid;
     sb->st_size = in->size;
     sb->st_blocks = (in->size + 4095) / 4096;
-    sb->st_atimespec = sb->st_mtimespec =
-	sb->st_ctimespec = in->mtime;
+    sb->st_atim = sb->st_mtim = sb->st_ctim = in->mtime;
 }
 
 int fs_getattr(const char *path, struct stat *sb)
@@ -833,8 +858,8 @@ int fs_write(const char *path, const char *buf, size_t len,
     lr->len = sizeof(log_data);
 
     *ld = (log_data) { .inum = (uint32_t)inum,
-		       .file_offset = (int64_t)offset,
 		       .obj_offset = (uint32_t)obj_offset,
+		       .file_offset = (int64_t)offset,
 		       .size = (int64_t)new_size,
 		       .len = (uint32_t)len };
 
@@ -1035,6 +1060,24 @@ void do_log_trunc(uint32_t inum, off_t offset)
     tr->new_size = offset;
 
     make_record(rec, len, nullptr, 0);
+}
+
+int fs_truncate(const char *path, off_t len)
+{
+    int inum = path_2_inum(path);
+    if (inum < 0)
+	return inum;
+
+    fs_file *f = (fs_file*)inode_map[inum];
+    if (f->type == OBJ_DIR)
+	return -EISDIR;
+    if (f->type != OBJ_FILE)
+	return -EINVAL;
+    
+    do_trunc(f, len);
+    do_log_trunc(inum, len);
+
+    return 0;
 }
 
 /* do I need a parent inum in fs_obj?
@@ -1282,19 +1325,16 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
     return 0;
 }
 
-int initialize(void)
+int initialize(const char *prefix)
 {
-    if (!file_prefix)
-	return -1;
-
-    init_stuff();
+    init_stuff(prefix);
     
     for (int i = 0; ; i++) {
 	size_t offset = get_offset(i);
 	if (offset < 0)
 	    return 0;
 	void *buf = malloc(offset);
-	if (pread(get_fd(i), buf, offset, 0) != offset)
+	if (pread(get_fd(i), buf, offset, 0) != (int)offset)
 	    return -1;
 	if (read_hdr(i, buf, offset) < 0)
 	    return -1;
@@ -1304,11 +1344,12 @@ int initialize(void)
     return 0;
 }
 
-int mkfs(void)
+int mkfs(const char *prefix)
 {
-    if (this_index != 0 || !file_prefix)
+    if (this_index != 0)
 	return -1;
-    init_stuff();
+    
+    init_stuff(prefix);
 
     auto root = new fs_directory;
     root->inum = 1;

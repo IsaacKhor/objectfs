@@ -1,9 +1,14 @@
+#define FUSE_USE_VERSION 27
+#define _FILE_OFFSET_BITS 64
+
 #include <stdlib.h>
 #include <stddef.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <fuse.h>
+#include <string.h>
 
 extern int fs_getattr(const char *path, struct stat *sb);
 extern int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
@@ -24,6 +29,7 @@ extern int fs_symlink(const char *path, const char *contents);
 extern int fs_readlink(const char *path, char *buf, size_t len);
 extern int fs_statfs(const char *path, struct statvfs *st);
 extern int fs_fsync(const char * path, int, struct fuse_file_info *fi);
+extern int fs_truncate(const char *path, off_t len);
 
 struct dirent {
     char name[64];
@@ -116,3 +122,4 @@ int py_statfs(const char *path, struct statvfs *st)
 {
     return fs_statfs(path, st);
 }
+
