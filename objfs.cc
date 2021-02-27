@@ -183,7 +183,7 @@ class fs_file : public fs_obj {
 public:
     extmap  extents;
 };
-  
+
 class fs_directory : public fs_obj {
 public:
     std::map<std::string,uint32_t> dirents;
@@ -466,7 +466,7 @@ static int read_log_rename(log_rename *mv)
 // returns 0 on success, bytes to read if not enough data,
 // -1 if bad format. Must pass at least 32B
 //
-static size_t read_hdr(int idx, void *data, size_t len)
+size_t read_hdr(int idx, void *data, size_t len)
 {
     obj_header *oh = (obj_header*)data;
     if (oh->hdr_len > len)
@@ -513,6 +513,180 @@ static size_t read_hdr(int idx, void *data, size_t len)
     return 0;
 }
 
+
+int this_index;
+char *file_prefix;
+
+// https://docs.microsoft.com/en-us/cpp/cpp/how-to-create-and-use-shared-ptr-instances?view=msvc-160
+// not hugely useful here, but good exercise for later
+
+class openfile {
+public:
+    int index;
+    int fd;
+};
+
+std::map<int,std::shared_ptr<openfile>> fd_cache;
+std::queue<std::shared_ptr<openfile>> fd_fifo;
+#define MAX_OPEN_FDS 50
+
+int get_fd(int index)
+{
+    // hit?
+    if (fd_cache.find(index) != fd_cache.end()) {
+	auto of = fd_cache[index];
+	return of->fd;
+    }
+
+    // evict?
+    if (fd_fifo.size() >= MAX_OPEN_FDS) {
+	auto of = fd_fifo.front();
+	close(of->fd);
+	fd_cache.erase(of->index);
+	fd_fifo.pop();
+    }
+
+    // open a new one
+    char buf[256];
+    sprintf(buf, "%s.%08x", file_prefix, index);
+    int fd = open(buf, O_RDONLY);
+    if (fd < 0)
+	return -1;
+    
+    auto of = std::make_shared<openfile>();
+    of->index = index;
+    of->fd = fd;
+    fd_cache[index] = of;
+    fd_fifo.push(of);
+
+    return fd;
+}
+
+/* 
+   when do we decide to write? 
+   (1) When we get to a fixed object size
+   (2) when we get an fsync (maybe)
+   (3) on timeout (working on it...)
+       (need a reader/writer lock for this one?)
+ */
+
+void  *meta_log_head;
+void  *meta_log_tail;
+size_t meta_log_len;
+
+void  *data_log_head;
+void  *data_log_tail;
+size_t data_log_len;
+
+size_t data_offset(void)
+{
+    return (char*)data_log_tail - (char*)data_log_head;
+}
+
+size_t meta_offset(void)
+{
+    return (char*)meta_log_tail - (char*)meta_log_head;
+}
+    
+//std::set<std::shared_ptr<fs_obj>> dirty_inodes;
+std::set<fs_obj*> dirty_inodes;
+
+void init_stuff(void)
+{
+    meta_log_len = 64 * 1024;
+    meta_log_head = meta_log_tail = malloc(meta_log_len*2);
+
+    data_log_len = 8 * 1024 * 1024;
+    data_log_head = data_log_tail = malloc(data_log_len);
+}
+
+void write_inode(fs_obj *f);
+
+void write_everything_out(void)
+{
+    for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
+	 it = dirty_inodes.erase(it)) {
+	write_inode(*it);
+    }
+
+    char path[strlen(file_prefix) + 32];
+    sprintf(path, "%s.%08x", file_prefix, this_index);
+
+    obj_header h = {
+	.magic = OBJFS_MAGIC,
+	.version = 1,
+	.type = 1,
+	.this_index = this_index,
+	.hdr_len = (int)(meta_offset() + sizeof(obj_header)),
+    };
+    this_index++;
+    
+    int fd = open(path, O_WRONLY|O_CREAT, 0777);
+    if (fd < 0)
+	/* ERROR */;
+
+    write(fd, &h, sizeof(h));
+    write(fd, meta_log_head, meta_offset());
+    write(fd, data_log_head, data_offset());
+    close(fd);
+    
+    meta_log_tail = meta_log_head;
+    data_log_tail = data_log_head;
+}
+
+void make_record(const void *hdr, size_t hdrlen,
+		 const void *data, size_t datalen)
+{
+    if ((meta_offset() + hdrlen > meta_log_len) ||
+	(data_offset() + datalen > data_log_len))
+	write_everything_out();
+
+    memcpy(meta_log_tail, hdr, hdrlen);
+    meta_log_tail = hdrlen + (char*)meta_log_tail;
+    if (datalen > 0) {
+	memcpy(data_log_tail, data, datalen);
+	data_log_tail = datalen + (char*)data_log_tail;
+    }
+}
+
+std::map<int,int> data_offsets;
+
+int get_offset(int index)
+{
+    if (data_offsets.find(index) != data_offsets.end())
+	return data_offsets[index];
+
+    int fd = get_fd(index);	// I should think about exceptions...
+    if (fd < 0)
+	return -1;
+    
+    obj_header h;
+    size_t len = pread(fd, &h, sizeof(h), 0);
+    if (len < 0)
+	return -1;
+
+    data_offsets[index] = h.hdr_len;
+    return h.hdr_len;
+}
+    
+int read_data(void *buf, int index, off_t offset, size_t len)
+{
+    if (index == this_index) {
+	len = std::min(len, data_offset() - index);
+	memcpy(buf, offset + (char*)data_log_head, len);
+	return len;
+    }
+    
+    int fd = get_fd(index);
+    if (fd < 0)
+	return -1;
+
+    size_t n = get_offset(index);
+    if (n < 0)
+	return n;
+    
+    return pread(fd, buf, len, offset + n);
+}
 
 static std::vector<std::string> split(const std::string& s, char delimiter)
 {
@@ -634,94 +808,6 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 
 
 // -------------------------------
-
-/* 
-   how is write going to work? keep the following:
-   - buffer to hold log headers
-   - buffer to hold data
-   - set of dirty inodes
-
-   when do we decide to write? 
-   (1) When we get to a fixed object size
-   (2) when we get an fsync (maybe)
-   (3) on timeout (working on it...)
-       (need a reader/writer lock for this one?)
- */
-
-void  *meta_log_head;
-void  *meta_log_tail;
-size_t meta_log_len;
-
-void  *data_log_head;
-void  *data_log_tail;
-size_t data_log_len;
-
-size_t data_offset(void)
-{
-    return (char*)data_log_tail - (char*)data_log_head;
-}
-
-size_t meta_offset(void)
-{
-    return (char*)meta_log_tail - (char*)meta_log_head;
-}
-    
-//std::set<std::shared_ptr<fs_obj>> dirty_inodes;
-std::set<fs_obj*> dirty_inodes;
-
-int this_index;
-char *file_prefix;
-
-void init_stuff(void)
-{
-    meta_log_len = 64 * 1024;
-    meta_log_head = meta_log_tail = malloc(meta_log_len*2);
-
-    data_log_len = 8 * 1024 * 1024;
-    data_log_head = data_log_tail = malloc(data_log_len);
-}
-
-void write_everything_out(void)
-{
-    char path[strlen(file_prefix) + 32];
-    sprintf(path, "%s.%08x", file_prefix, this_index);
-
-    obj_header h = {
-	.magic = OBJFS_MAGIC,
-	.version = 1,
-	.type = 1,
-	.this_index = this_index,
-	.hdr_len = (int)(meta_offset() + sizeof(obj_header)),
-    };
-    this_index++;
-    
-    int fd = open(path, O_WRONLY|O_CREAT, 0777);
-    if (fd < 0)
-	/* ERROR */;
-
-    write(fd, &h, sizeof(h));
-    write(fd, meta_log_head, meta_offset());
-    write(fd, data_log_head, data_offset());
-    close(fd);
-    
-    meta_log_tail = meta_log_head;
-    data_log_tail = data_log_head;
-}
-
-void make_record(const void *hdr, size_t hdrlen,
-		 const void *data, size_t datalen)
-{
-    if ((meta_offset() + hdrlen > meta_log_len) ||
-	(data_offset() + datalen > data_log_len))
-	write_everything_out();
-
-    memcpy(meta_log_tail, hdr, hdrlen);
-    meta_log_tail = hdrlen + (char*)meta_log_tail;
-    if (datalen > 0) {
-	memcpy(data_log_tail, data, datalen);
-	data_log_tail = datalen + (char*)data_log_tail;
-    }
-}
 
 int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
@@ -1059,90 +1145,6 @@ int fs_utimens(const char *path, const struct timespec tv[2])
     return 0;
 }
 
-// https://docs.microsoft.com/en-us/cpp/cpp/how-to-create-and-use-shared-ptr-instances?view=msvc-160
-// not hugely useful here, but good exercise for later
-
-class openfile {
-public:
-    int index;
-    int fd;
-};
-
-std::map<int,std::shared_ptr<openfile>> fd_cache;
-std::queue<std::shared_ptr<openfile>> fd_fifo;
-#define MAX_OPEN_FDS 50
-
-int get_fd(int index)
-{
-    // hit?
-    if (fd_cache.find(index) != fd_cache.end()) {
-	auto of = fd_cache[index];
-	return of->fd;
-    }
-
-    // evict?
-    if (fd_fifo.size() >= MAX_OPEN_FDS) {
-	auto of = fd_fifo.front();
-	close(of->fd);
-	fd_cache.erase(of->index);
-	fd_fifo.pop();
-    }
-
-    // open a new one
-    char buf[256];
-    sprintf(buf, "%s.%08x", file_prefix, index);
-    int fd = open(buf, O_RDONLY);
-    if (fd < 0)
-	return -1;
-    
-    auto of = std::make_shared<openfile>();
-    of->index = index;
-    of->fd = fd;
-    fd_cache[index] = of;
-    fd_fifo.push(of);
-
-    return fd;
-}
-
-std::map<int,int> data_offsets;
-
-int get_offset(int index)
-{
-    if (data_offsets.find(index) != data_offsets.end())
-	return data_offsets[index];
-
-    int fd = get_fd(index);	// I should think about exceptions...
-    if (fd < 0)
-	return -1;
-    
-    obj_header h;
-    size_t len = pread(fd, &h, sizeof(h), 0);
-    if (len < 0)
-	return -1;
-
-    data_offsets[index] = h.hdr_len;
-    return h.hdr_len;
-}
-    
-int read_data(void *buf, int index, off_t offset, size_t len)
-{
-    if (index == this_index) {
-	len = std::min(len, data_offset() - index);
-	memcpy(buf, offset + (char*)data_log_head, len);
-	return len;
-    }
-    
-    int fd = get_fd(index);
-    if (fd < 0)
-	return -1;
-
-    size_t data_offset = get_offset(index);
-    if (data_offset < 0)
-	return data_offset;
-    
-    return pread(fd, buf, len, offset + data_offset);
-}
-
 
 int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    struct fuse_file_info *fi)
@@ -1277,6 +1279,49 @@ int fs_statfs(const char *path, struct statvfs *st)
 
 int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 {
+    return 0;
+}
+
+int initialize(void)
+{
+    if (!file_prefix)
+	return -1;
+
+    init_stuff();
+    
+    for (int i = 0; ; i++) {
+	size_t offset = get_offset(i);
+	if (offset < 0)
+	    return 0;
+	void *buf = malloc(offset);
+	if (pread(get_fd(i), buf, offset, 0) != offset)
+	    return -1;
+	if (read_hdr(i, buf, offset) < 0)
+	    return -1;
+	free(buf);
+    }
+
+    return 0;
+}
+
+int mkfs(void)
+{
+    if (this_index != 0 || !file_prefix)
+	return -1;
+    init_stuff();
+
+    auto root = new fs_directory;
+    root->inum = 1;
+    root->uid = 0;
+    root->gid = 0;
+    root->mode = S_IFDIR | 0744;
+    root->rdev = 0;
+    root->size = 0;
+    clock_gettime(CLOCK_REALTIME, &root->mtime);
+
+    write_inode(root);
+    write_everything_out();
+
     return 0;
 }
 
