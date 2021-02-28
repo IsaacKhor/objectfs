@@ -68,6 +68,12 @@ extern "C" int mkfs(const char*);
 extern "C" void sync(void);
 extern "C" void teardown(void);
 
+void xclock_gettime(int x, struct timespec *time)
+{
+    time->tv_sec = 0;
+    time->tv_nsec = 0;
+}
+
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
 
@@ -232,7 +238,7 @@ struct log_data {
     int64_t  file_offset;	// in bytes
     int64_t  size;		// file size after this write
     uint32_t len;		// bytes
-};
+} __attribute__((packed,aligned(1)));
 
 /* inode update. Note that this is all that's needed for special
  * files. 
@@ -243,14 +249,14 @@ struct log_inode {
     uint32_t        uid, gid;
     uint32_t        rdev;
     struct timespec mtime;
-};
+} __attribute__((packed,aligned(1)));
 
 /* truncate a file. maybe require truncate->0 before delete?
  */
 struct log_trunc {
     uint32_t inum;
     int64_t  new_size;		// must be <= existing
-};
+} __attribute__((packed,aligned(1)));
 
 // need a log_create
 
@@ -259,13 +265,13 @@ struct log_delete {
     uint32_t inum;
     uint8_t  namelen;
     char     name[];
-};
+} __attribute__((packed,aligned(1)));
 
 struct log_symlink {
     uint32_t inum;
     uint8_t  len;
     char     target[];
-};
+} __attribute__((packed,aligned(1)));
 
 /* cross-directory rename is handled by specifying both source and
  * destination parent directory.
@@ -277,7 +283,7 @@ struct log_rename {
     uint8_t  name1_len;
     uint8_t  name2_len;
     char     name[];
-};
+} __attribute__((packed,aligned(1)));
 
 /* create a new name
  */
@@ -286,7 +292,7 @@ struct log_create {
     uint32_t  inum;
     uint8_t   namelen;
     char      name[];
-};
+} __attribute__((packed,aligned(1)));
 
 
 enum log_rec_type {
@@ -304,7 +310,7 @@ struct log_record {
     uint16_t type : 4;
     uint16_t len : 12;
     char data[];
-};
+} __attribute__((packed,aligned(1)));
 
 //#define OBJFS_MAGIC 0x4f424653	// "OBFS"
 #define OBJFS_MAGIC 0x5346424f	// "OBFS"
@@ -705,7 +711,7 @@ int get_offset(int index)
     data_offsets[index] = h.hdr_len;
     return h.hdr_len;
 }
-    
+
 int read_data(void *buf, int index, off_t offset, size_t len)
 {
     if (index == this_index) {
@@ -910,12 +916,12 @@ void write_inode(fs_obj *f)
 void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
 {
     size_t len = sizeof(log_record) + sizeof(log_create) + leaf.length();
-    char buf[len];
+    char buf[len+sizeof(log_record)];
     log_record *rec = (log_record*) buf;
     log_create *cr8 = (log_create*) rec->data;
 
     rec->type = LOG_CREATE;
-    rec->len = sizeof(*cr8) + leaf.length();
+    rec->len = len - sizeof(log_record);
     cr8->parent_inum = parent_inum;
     cr8->inum = inum;
     cr8->namelen = leaf.length();
@@ -942,7 +948,7 @@ int fs_mkdir(const char *path, mode_t mode)
     dir->inum = inum;
     dir->mode = mode | S_IFDIR;
     dir->rdev = dir->size = 0;
-    clock_gettime(CLOCK_REALTIME, &dir->mtime);
+    xclock_gettime(CLOCK_REALTIME, &dir->mtime);
 #if 0
     struct fuse_context *ctx = fuse_get_context();
     dir->uid = ctx->uid;
@@ -951,7 +957,7 @@ int fs_mkdir(const char *path, mode_t mode)
     
     inode_map[inum] = dir;
     parent->dirents[leaf] = inum;
-    clock_gettime(CLOCK_REALTIME, &parent->mtime);
+    xclock_gettime(CLOCK_REALTIME, &parent->mtime);
     dirty_inodes.insert(parent);
     
     write_inode(dir);		// can't rely on dirty_inodes
@@ -997,7 +1003,7 @@ int fs_rmdir(const char *path)
     parent->dirents.erase(leaf);
     delete dir;
     
-    clock_gettime(CLOCK_REALTIME, &parent->mtime);
+    xclock_gettime(CLOCK_REALTIME, &parent->mtime);
     dirty_inodes.insert(parent);
     
     do_log_delete(parent_inum, inum, leaf);
@@ -1026,7 +1032,7 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
     f->mode = mode;
     f->rdev = dev;
     f->size = 0;
-    clock_gettime(CLOCK_REALTIME, &f->mtime);
+    xclock_gettime(CLOCK_REALTIME, &f->mtime);
 
 #if 0
     struct fuse_context *ctx = fuse_get_context();
@@ -1040,7 +1046,7 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
     write_inode(f);		// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
 
-    clock_gettime(CLOCK_REALTIME, &dir->mtime);
+    xclock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
     
     return 0;
@@ -1066,7 +1072,7 @@ void do_log_trunc(uint32_t inum, off_t offset)
     log_trunc *tr = (log_trunc*) rec->data;
 
     rec->type = LOG_TRUNC;
-    rec->len = sizeof(*tr);
+    rec->len = sizeof(log_trunc);
     tr->inum = inum;
     tr->new_size = offset;
 
@@ -1102,7 +1108,7 @@ int fs_unlink(const char *path)
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
 
     dir->dirents.erase(leaf);
-    clock_gettime(CLOCK_REALTIME, &dir->mtime);
+    xclock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
 
     if (obj->type == OBJ_FILE) {
@@ -1118,13 +1124,14 @@ int fs_unlink(const char *path)
 void do_log_rename(int src_inum, int src_parent, int dst_parent,
 		      std::string src_leaf, std::string dst_leaf)
 {
-    int len = sizeof(log_rename) + src_leaf.length() + dst_leaf.length();
-    char buf[sizeof(log_record)+len];
+    int len = sizeof(log_record) + sizeof(log_rename) +
+	src_leaf.length() + dst_leaf.length();
+    char buf[len];
     log_record *rec = (log_record*)buf;
     log_rename *mv = (log_rename*)rec->data;
 
     rec->type = LOG_RENAME;
-    rec->len = len;
+    rec->len = len-sizeof(log_record);
 
     mv->inum = src_inum;
     mv->parent1 = src_parent;
@@ -1134,7 +1141,7 @@ void do_log_rename(int src_inum, int src_parent, int dst_parent,
     mv->name2_len = dst_leaf.length();
     memcpy(&mv->name[mv->name1_len], dst_leaf.c_str(), dst_leaf.length());
     
-    make_record(rec, sizeof(log_record)+len, nullptr, 0);
+    make_record(rec, len, nullptr, 0);
 }
 
 int fs_rename(const char *src_path, const char *dst_path)
@@ -1156,11 +1163,11 @@ int fs_rename(const char *src_path, const char *dst_path)
 	return -ENOTDIR;
 
     srcdir->dirents.erase(src_leaf);
-    clock_gettime(CLOCK_REALTIME, &srcdir->mtime);
+    xclock_gettime(CLOCK_REALTIME, &srcdir->mtime);
     dirty_inodes.insert(srcdir);
 
     dstdir->dirents[dst_leaf] = src_inum;
-    clock_gettime(CLOCK_REALTIME, &dstdir->mtime);
+    xclock_gettime(CLOCK_REALTIME, &dstdir->mtime);
     dirty_inodes.insert(dstdir);
     
     do_log_rename(src_inum, src_parent, dst_parent, src_leaf, dst_leaf);
@@ -1191,7 +1198,7 @@ int fs_utimens(const char *path, const struct timespec tv[2])
 
     fs_obj *obj = inode_map[inum];
     if (tv == NULL || tv[1].tv_nsec == UTIME_NOW)
-	clock_gettime(CLOCK_REALTIME, &obj->mtime);
+	xclock_gettime(CLOCK_REALTIME, &obj->mtime);
     else if (tv[1].tv_nsec != UTIME_OMIT)
 	obj->mtime = tv[1];
     dirty_inodes.insert(obj);
@@ -1242,7 +1249,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 
 void write_symlink(int inum, std::string target)
 {
-    size_t len = sizeof(log_symlink) + target.length();
+    size_t len = sizeof(log_record) + sizeof(log_symlink) + target.length();
     char buf[sizeof(log_record) + len];
     log_record *rec = (log_record*) buf;
     log_symlink *l = (log_symlink*) rec->data;
@@ -1253,7 +1260,7 @@ void write_symlink(int inum, std::string target)
     l->len = target.length();
     memcpy(l->target, target.c_str(), l->len);
 
-    make_record(rec, sizeof(log_record)+len, nullptr, 0);
+    make_record(rec, len, nullptr, 0);
 }
 
 int fs_symlink(const char *path, const char *contents)
@@ -1277,7 +1284,7 @@ int fs_symlink(const char *path, const char *contents)
     in->uid = ctx->uid;
     in->gid = ctx->gid;
 #endif
-    clock_gettime(CLOCK_REALTIME, &l->mtime);
+    xclock_gettime(CLOCK_REALTIME, &l->mtime);
 
     l->target = leaf;
     inode_map[inum] = l;
@@ -1287,7 +1294,7 @@ int fs_symlink(const char *path, const char *contents)
     write_symlink(inum, leaf);
     write_dirent(parent_inum, leaf, inum);
     
-    clock_gettime(CLOCK_REALTIME, &dir->mtime);
+    xclock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
 
     return 0;
@@ -1401,7 +1408,7 @@ int mkfs(const char *prefix)
     root->mode = S_IFDIR | 0744;
     root->rdev = 0;
     root->size = 0;
-    clock_gettime(CLOCK_REALTIME, &root->mtime);
+    xclock_gettime(CLOCK_REALTIME, &root->mtime);
 
     write_inode(root);
     write_everything_out();

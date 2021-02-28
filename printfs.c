@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
+#include <stdlib.h>
 
 struct log_data {
     uint32_t inum;		// is 32 enough?
@@ -8,7 +9,7 @@ struct log_data {
     int64_t  file_offset;	// in bytes
     int64_t  size;		// file size after this write
     uint32_t len;		// bytes
-};
+}__attribute__((packed,aligned(1)));
 
 struct log_inode {
     uint32_t        inum;
@@ -16,25 +17,25 @@ struct log_inode {
     uint32_t        uid, gid;
     uint32_t        rdev;
     struct timespec mtime;
-};
+}__attribute__((packed,aligned(1)));
 
 struct log_trunc {
     uint32_t inum;
     int64_t  new_size;		// must be <= existing
-};
+}__attribute__((packed,aligned(1)));
 
 struct log_delete {
     uint32_t parent;
     uint32_t inum;
     uint8_t  namelen;
     char     name[];
-};
+}__attribute__((packed,aligned(1)));
 
 struct log_symlink {
     uint32_t inum;
     uint8_t  len;
     char     target[];
-};
+}__attribute__((packed,aligned(1)));
 
 struct log_rename {
     uint32_t inum;		// of entity to rename
@@ -43,14 +44,14 @@ struct log_rename {
     uint8_t  name1_len;
     uint8_t  name2_len;
     char     name[];
-};
+}__attribute__((packed,aligned(1)));
 
 struct log_create {
     uint32_t  parent_inum;
     uint32_t  inum;
     uint8_t   namelen;
     char      name[];
-};
+}__attribute__((packed,aligned(1),aligned(1)));
 
 enum log_rec_type {
     LOG_INODE = 1,
@@ -67,7 +68,7 @@ struct log_record {
     uint16_t type : 4;
     uint16_t len : 12;
     char data[];
-};
+}__attribute__((packed,aligned(1)));
 
 #define OBJFS_MAGIC 0x5346424f	// "OBFS"
 
@@ -97,7 +98,7 @@ void read_log_inode(void *ptr)
 void read_log_trunc(void *ptr)
 {
     struct log_trunc *t = ptr;
-    printf("INODE:\n inum %d\n size %d\n", t->inum, (int)t->new_size);
+    printf("TRUNC:\n inum %d\n size %d\n", t->inum, (int)t->new_size);
 }
 void read_log_delete(void *ptr)
 {
@@ -118,18 +119,22 @@ void read_log_rename(void *ptr)
            r->inum, r->parent1, r->parent2, r->name1_len, r->name,
            r->name2_len, &r->name[r->name1_len]);
 }
+void read_log_create(void *ptr)
+{
+    struct log_create *r = ptr;
+    printf("CREATE:\n parent %d\n inum %d\n name %*s\n",
+           r->parent_inum, r->inum, r->namelen, r->name);
+}    
 
 int main(int argc, char **argv)
 {
     FILE *fp = fopen(argv[1], "r");
-    int size = fseek(fp, 0, SEEK_END);
-    fseek(fp, 0, SEEK_SET);
-    char buf[size];
-    fread(buf, size, 1, fp);
+    char *buf = malloc(1024*1024);
+    int size = fread(buf, 1, 1024*1024, fp);
 
     struct obj_header *oh = (void*)buf;
-    printf("magic %x\nversion %d\ntype %d\nhdr_len %d\nindex %d\n",
-           oh->magic, oh->version, oh->type, oh->hdr_len, oh->this_index);
+    printf("size %d\nmagic %x\nversion %d\ntype %d\nhdr_len %d\nindex %d\n",
+           size, oh->magic, oh->version, oh->type, oh->hdr_len, oh->this_index);
 
     int meta_bytes = oh->hdr_len - sizeof(struct obj_header);
     struct log_record *end = (void*)&oh->data[meta_bytes];
@@ -153,6 +158,9 @@ int main(int argc, char **argv)
 	    read_log_symlink(rec->data);
 	    break;
 	case LOG_RENAME:
+	    read_log_rename(rec->data);
+	    break;
+	case LOG_CREATE:
 	    read_log_rename(rec->data);
 	    break;
 	case LOG_NULL:
