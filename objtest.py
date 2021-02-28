@@ -81,10 +81,13 @@ def xbytes(path):
         return bytes(path)
 
 def mkfs(pfx):
-    return lib.mkfs(pfx)
+    return lib.mkfs(xbytes(pfx))
 
 def init(pfx):
-    return lib.initialize(pfx)
+    return lib.initialize(xbytes(pfx))
+
+def teardown():
+    lib.teardown()
 
 def getattr(path):
     sb = stat()
@@ -102,35 +105,36 @@ def readdir(path):
         return val, []
 
 def create(path, mode):
-    retval = lib.py_create(path, c_int(mode), byref(null_fi))
+    retval = lib.py_create(xbytes(path), c_int(mode), byref(null_fi))
     return retval
 
 def mkdir(path, mode):
-    retval = lib.py_mkdir(path, c_int(mode))
+    print('mkdir path:', path)
+    retval = lib.py_mkdir(xbytes(path), c_int(mode))
     return retval
 
 def truncate(path, offset):
-    retval = lib.py_truncate(path, c_int(offset))
+    retval = lib.py_truncate(xbytes(path), c_int(offset))
     return retval
 
 def unlink(path):
-    retval = lib.py_unlink(path)
+    retval = lib.py_unlink(xbytes(path))
     return retval
 
 def rmdir(path):
-    retval = lib.py_rmdir(path)
+    retval = lib.py_rmdir(xbytes(path))
     return retval
 
 def rename(path1, path2):
-    retval = lib.py_rename(path1, path2)
+    retval = lib.py_rename(xbytes(path1), xbytes(path2))
     return retval
 
 def chmod(path, mode):
-    retval = lib.py_chmod(path, c_int(mode))
+    retval = lib.py_chmod(xbytes(path), c_int(mode))
     return retval
 
 def utime(path, actime, modtime):
-    retval = lib.py_utime(path, c_int(actime), c_int(modtime))
+    retval = lib.py_utime(xbytes(path), c_int(actime), c_int(modtime))
     return retval
 
 def read(path, len, offset):
@@ -142,10 +146,13 @@ def read(path, len, offset):
 
 def write(path, data, offset):
     nbytes = len(data)
-    val = lib.py_write(path, xbytes(data), c_int(nbytes),
+    val = lib.py_write(xbytes(path), xbytes(data), c_int(nbytes),
                                c_int(offset), byref(null_fi))
     return val
 
+def sync():
+    lib.sync()
+    
 S_IFMT  = 0o0170000  # bit mask for the file type bit field
 S_IFREG = 0o0100000  # regular file
 S_IFDIR = 0o0040000  # directory

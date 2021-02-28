@@ -66,6 +66,7 @@ extern "C" int fs_truncate(const char *path, off_t len);
 extern "C" int initialize(const char*);
 extern "C" int mkfs(const char*);
 extern "C" void sync(void);
+extern "C" void teardown(void);
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -553,6 +554,8 @@ public:
     int fd;
 };
 
+// simple cache using FIFO eviction, much easier than implementing LRU
+//
 std::map<int,std::shared_ptr<openfile>> fd_cache;
 std::queue<std::shared_ptr<openfile>> fd_fifo;
 #define MAX_OPEN_FDS 50
@@ -936,7 +939,7 @@ int fs_mkdir(const char *path, mode_t mode)
     fs_directory *dir = new fs_directory;
     dir->type = OBJ_DIR;
     dir->inum = inum;
-    dir->mode = mode;
+    dir->mode = mode | S_IFDIR;
     dir->rdev = dir->size = 0;
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
 #if 0
@@ -1349,6 +1352,37 @@ int initialize(const char *prefix)
     }
 
     return 0;
+}
+
+void teardown(void)
+{
+    for (auto it = inode_map.begin(); it != inode_map.end();
+	 it = inode_map.erase(it)) ;
+    this_index = 0;
+
+    for (auto it = fd_cache.begin(); it != fd_cache.end(); it = fd_cache.erase(it)) {
+	auto [key, val] = *it;
+	close(val->fd);
+    }
+
+    while (!fd_fifo.empty())
+	fd_fifo.pop();
+
+    for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
+	 it = dirty_inodes.erase(it));
+
+    free(meta_log_head);
+    free(data_log_head);
+
+    for (auto it = data_offsets.begin(); it != data_offsets.end();
+	 it = data_offsets.erase(it));
+
+    for (auto it = path_map.begin(); it != path_map.end();
+	 it = path_map.erase(it));
+    while (!path_fifo.empty())
+	path_fifo.pop();
+
+    next_inode = 2;
 }
 
 int mkfs(const char *prefix)
