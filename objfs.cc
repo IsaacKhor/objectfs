@@ -511,6 +511,7 @@ size_t read_hdr(int idx, void *data, size_t len)
 	case LOG_DATA:
 	    if (read_log_data(idx, (log_data*)&rec->data[0]) < 0)
 		return -1;
+	    break;
 	case LOG_INODE:
 	    if (read_log_inode((log_inode*)&rec->data[0]) < 0)
 		return -1;
