@@ -31,6 +31,13 @@ extern int fs_statfs(const char *path, struct statvfs *st);
 extern int fs_fsync(const char * path, int, struct fuse_file_info *fi);
 extern int fs_truncate(const char *path, off_t len);
 
+struct fuse_context ctx = {.uid = 500, .gid = 500};
+
+struct fuse_context *fuse_get_context(void)
+{
+    return &ctx;
+}
+
 struct dirent {
     char name[64];
     struct stat sb;

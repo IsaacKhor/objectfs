@@ -419,23 +419,6 @@ int read_log_trunc(log_trunc *tr)
     return 0;
 }
 
-int read_log_data(int idx, log_data *d)
-{
-    auto it = inode_map.find(d->inum);
-    if (it == inode_map.end())
-	return -1;
-
-    fs_file *f = (fs_file*) inode_map[d->inum];
-    
-    // optimization - check if it extends the previous record?
-    extent e = {.objnum = idx, .offset = d->obj_offset,
-		.len = d->len};
-    f->extents.update(d->file_offset, e);
-    f->size = d->size;
-
-    return 0;
-}
-
 // assume directory has been emptied or file has been truncated.
 //
 static int read_log_delete(log_delete *rm)
@@ -496,6 +479,36 @@ static int read_log_rename(log_rename *mv)
     return 0;
 }
 
+int read_log_data(int idx, log_data *d)
+{
+    auto it = inode_map.find(d->inum);
+    if (it == inode_map.end())
+	return -1;
+
+    fs_file *f = (fs_file*) inode_map[d->inum];
+    
+    // optimization - check if it extends the previous record?
+    extent e = {.objnum = idx, .offset = d->obj_offset,
+		.len = d->len};
+    f->extents.update(d->file_offset, e);
+    f->size = d->size;
+
+    return 0;
+}
+
+int read_log_create(log_create *c)
+{
+    auto it = inode_map.find(c->parent_inum);
+    if (it == inode_map.end())
+	return -1;
+
+    fs_directory *d = (fs_directory*) inode_map[c->parent_inum];
+    auto name = std::string(&c->name[0], c->namelen);
+    d->dirents[name] = d->inum;
+    
+    return 0;
+}
+
 // returns 0 on success, bytes to read if not enough data,
 // -1 if bad format. Must pass at least 32B
 //
@@ -514,10 +527,6 @@ size_t read_hdr(int idx, void *data, size_t len)
 
     while (rec < end) {
 	switch (rec->type) {
-	case LOG_DATA:
-	    if (read_log_data(idx, (log_data*)&rec->data[0]) < 0)
-		return -1;
-	    break;
 	case LOG_INODE:
 	    if (read_log_inode((log_inode*)&rec->data[0]) < 0)
 		return -1;
@@ -538,12 +547,20 @@ size_t read_hdr(int idx, void *data, size_t len)
 	    if (read_log_rename((log_rename*)&rec->data[0]) < 0)
 		return -1;
 	    break;
+	case LOG_DATA:
+	    if (read_log_data(idx, (log_data*)&rec->data[0]) < 0)
+		return -1;
+	    break;
+	case LOG_CREATE:
+	    if (read_log_create((log_create*)&rec->data[0]) < 0)
+		return -1;
+	    break;
 	case LOG_NULL:
 	    break;
 	default:
 	    return -1;
 	}
-	rec = (log_record*)&rec->data[rec->len + 2];
+	rec = (log_record*)&rec->data[rec->len];
     }
     return 0;
 }
@@ -640,6 +657,14 @@ void init_stuff(const char *prefix)
 
 void write_inode(fs_obj *f);
 
+void printout(void *hdr, int hdrlen)
+{
+    uint8_t *p = (uint8_t*) hdr;
+    for (int i = 0; i < hdrlen; i++)
+	printf("%02x", p[i]);
+    printf("\n");
+}
+
 void write_everything_out(void)
 {
     for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
@@ -659,9 +684,14 @@ void write_everything_out(void)
     };
     this_index++;
     
-    int fd = open(path, O_WRONLY|O_CREAT, 0777);
+    int fd = open(path, O_WRONLY|O_CREAT|O_TRUNC, 0777);
     if (fd < 0)
+	perror(path), exit(1);
 	/* ERROR */;
+
+    printf("writing %s:\n", path);
+    printout((void*)&h, sizeof(h));
+    printout((void*)meta_log_head, meta_offset());
 
     write(fd, &h, sizeof(h));
     write(fd, meta_log_head, meta_offset());
@@ -684,6 +714,8 @@ void make_record(const void *hdr, size_t hdrlen,
 	(data_offset() + datalen > data_log_len))
 	write_everything_out();
 
+    printout((void*)hdr, hdrlen);
+    
     memcpy(meta_log_tail, hdr, hdrlen);
     meta_log_tail = hdrlen + (char*)meta_log_tail;
     if (datalen > 0) {
@@ -949,11 +981,10 @@ int fs_mkdir(const char *path, mode_t mode)
     dir->mode = mode | S_IFDIR;
     dir->rdev = dir->size = 0;
     xclock_gettime(CLOCK_REALTIME, &dir->mtime);
-#if 0
+
     struct fuse_context *ctx = fuse_get_context();
     dir->uid = ctx->uid;
     dir->gid = ctx->gid;
-#endif
     
     inode_map[inum] = dir;
     parent->dirents[leaf] = inum;
@@ -1034,11 +1065,9 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
     f->size = 0;
     xclock_gettime(CLOCK_REALTIME, &f->mtime);
 
-#if 0
     struct fuse_context *ctx = fuse_get_context();
-    in->uid = ctx->uid;
-    in->gid = ctx->gid;
-#endif
+    f->uid = ctx->uid;
+    f->gid = ctx->gid;
     
     inode_map[inum] = f;
     dir->dirents[leaf] = inum;
@@ -1279,11 +1308,11 @@ int fs_symlink(const char *path, const char *contents)
     l->type = OBJ_SYMLINK;
     l->inum = next_inode++;
     l->mode = S_IFLNK | 0777;
-#if 0
+
     struct fuse_context *ctx = fuse_get_context();
-    in->uid = ctx->uid;
-    in->gid = ctx->gid;
-#endif
+    l->uid = ctx->uid;
+    l->gid = ctx->gid;
+
     xclock_gettime(CLOCK_REALTIME, &l->mtime);
 
     l->target = leaf;

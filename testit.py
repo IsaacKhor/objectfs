@@ -55,8 +55,9 @@ if __name__ == '__main__':
     dir = os.path.dirname(prefix)
     try:
         for de in os.scandir(dir):
-            os.unlink(de.name)
-    except OSError:
+            print('deleting: ', dir+'/'+de.name)
+            val = os.unlink(dir + '/' + de.name)
+    except OSError(e):
         pass
 
     try:

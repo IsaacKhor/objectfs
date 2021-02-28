@@ -51,7 +51,7 @@ struct log_create {
     uint32_t  inum;
     uint8_t   namelen;
     char      name[];
-}__attribute__((packed,aligned(1),aligned(1)));
+}__attribute__((packed,aligned(1)));
 
 enum log_rec_type {
     LOG_INODE = 1,
@@ -63,6 +63,21 @@ enum log_rec_type {
     LOG_CREATE,
     LOG_NULL,			// fill space for alignment
 };
+
+char *t2s(int type)
+{
+    switch (type) {
+    case LOG_INODE: return "LOG_INODE";
+    case LOG_TRUNC: return "LOG_TRUNC";
+    case LOG_DELETE: return "LOG_DELETE";
+    case LOG_SYMLNK: return "LOG_SYMLNK";
+    case LOG_RENAME: return "LOG_RENAME";
+    case LOG_DATA: return "LOG_DATA";
+    case LOG_CREATE: return "LOG_CREATE";
+    case LOG_NULL: return "LOG_NULL";
+    }
+    return "*unknown*";
+}
 
 struct log_record {
     uint16_t type : 4;
@@ -84,13 +99,13 @@ struct obj_header {
 void read_log_data(void *ptr)
 {
     struct log_data *l = ptr;
-    printf("DATA:\n inum %d\n obj_offset %d\n file_offset %d\n size %d\n len %d\n",
+    printf(" inum %d\n obj_offset %d\n file_offset %d\n size %d\n len %d\n",
            l->inum, l->obj_offset, (int)l->file_offset, (int)l->size, l->len);
 }
 void read_log_inode(void *ptr)
 {
     struct log_inode *in = ptr;
-    printf("INODE:\n inum %d\n mode %o\n uid,gid %d %d\n rdev %d\n mtime %d.%09d\n",
+    printf(" inum %d\n mode %o\n uid,gid %d %d\n rdev %d\n mtime %d.%09d\n",
            in->inum, in->mode, in->uid, in->gid, in->rdev, (int)in->mtime.tv_sec,
            (int)in->mtime.tv_nsec);
     
@@ -98,33 +113,42 @@ void read_log_inode(void *ptr)
 void read_log_trunc(void *ptr)
 {
     struct log_trunc *t = ptr;
-    printf("TRUNC:\n inum %d\n size %d\n", t->inum, (int)t->new_size);
+    printf(" inum %d\n size %d\n", t->inum, (int)t->new_size);
 }
 void read_log_delete(void *ptr)
 {
     struct log_delete *d = ptr;
-    printf("DELETE:\n parent %d\n inum %d\n name %*s\n",
+    printf(" parent %d\n inum %d\n name %.*s\n",
            d->parent, d->inum, d->namelen, d->name);    
 }
 void read_log_symlink(void *ptr)
 {
     struct log_symlink *s = ptr;
-    printf("LINK:\n inum %d\n target %*s\n",
+    printf(" inum %d\n target %*s\n",
            s->inum, s->len, s->target);    
 }
 void read_log_rename(void *ptr)
 {
     struct log_rename *r = ptr;
-    printf("RENAME:\n inum %d\n srci %d\n dsti %d\n src %*s\n dst %*s\n",
+    printf(" inum %d\n srci %d\n dsti %d\n src %.*s\n dst %.*s\n",
            r->inum, r->parent1, r->parent2, r->name1_len, r->name,
            r->name2_len, &r->name[r->name1_len]);
 }
 void read_log_create(void *ptr)
 {
     struct log_create *r = ptr;
-    printf("CREATE:\n parent %d\n inum %d\n name %*s\n",
+    printf(" parent %d\n inum %d\n name %.*s\n",
            r->parent_inum, r->inum, r->namelen, r->name);
 }    
+
+void printout(void *hdr, int hdrlen)
+{
+    return;
+    uint8_t *p = (uint8_t*) hdr;
+    for (int i = 0; i < hdrlen; i++)
+	printf("%02x", p[i]);
+    printf("\n");
+}
 
 int main(int argc, char **argv)
 {
@@ -136,11 +160,15 @@ int main(int argc, char **argv)
     printf("size %d\nmagic %x\nversion %d\ntype %d\nhdr_len %d\nindex %d\n",
            size, oh->magic, oh->version, oh->type, oh->hdr_len, oh->this_index);
 
+    printout(buf, sizeof(*oh));
     int meta_bytes = oh->hdr_len - sizeof(struct obj_header);
     struct log_record *end = (void*)&oh->data[meta_bytes];
     struct log_record *rec = (void*)oh->data;
     
     while (rec < end) {
+        uint8_t *p = (uint8_t*) rec;
+        printout(p, rec->len+2);
+        printf("type: %d (%s) len: %d\n", rec->type, t2s(rec->type), rec->len);
 	switch (rec->type) {
 	case LOG_DATA:
 	    read_log_data(rec->data);
@@ -161,7 +189,7 @@ int main(int argc, char **argv)
 	    read_log_rename(rec->data);
 	    break;
 	case LOG_CREATE:
-	    read_log_rename(rec->data);
+	    read_log_create(rec->data);
 	    break;
 	case LOG_NULL:
             printf("null\n");
@@ -169,7 +197,7 @@ int main(int argc, char **argv)
 	default:
             printf("bad\n");
 	}
-	rec = (void*)&rec->data[rec->len + 2];
+	rec = (void*)&rec->data[rec->len];
     }
     return 0;
 }
