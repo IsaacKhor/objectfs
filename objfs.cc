@@ -542,7 +542,7 @@ size_t read_hdr(int idx, void *data, size_t len)
 }
 
 
-int this_index;
+int this_index = 0;
 char *file_prefix;
 
 // https://docs.microsoft.com/en-us/cpp/cpp/how-to-create-and-use-shared-ptr-instances?view=msvc-160
@@ -1349,6 +1349,7 @@ int initialize(const char *prefix)
 	if (read_hdr(i, buf, offset) < 0)
 	    return -1;
 	free(buf);
+	this_index = i+1;
     }
 
     return 0;
