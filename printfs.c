@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <time.h>
 
 struct log_data {
     uint32_t inum;		// is 32 enough?
@@ -79,23 +80,43 @@ struct obj_header {
     char    data[];
 };
 
-void read_log_data(idx, rec->data)
+void read_log_data(void *ptr)
 {
+    struct log_data *l = ptr;
+    printf("DATA:\n inum %d\n obj_offset %d\n file_offset %d\n size %d\n len %d\n",
+           l->inum, l->obj_offset, (int)l->file_offset, (int)l->size, l->len);
 }
-void read_log_inode(rec->data)
+void read_log_inode(void *ptr)
 {
+    struct log_inode *in = ptr;
+    printf("INODE:\n inum %d\n mode %o\n uid,gid %d %d\n rdev %d\n mtime %d.%09d\n",
+           in->inum, in->mode, in->uid, in->gid, in->rdev, (int)in->mtime.tv_sec,
+           (int)in->mtime.tv_nsec);
+    
 }
-void read_log_trunc(rec->data)
+void read_log_trunc(void *ptr)
 {
+    struct log_trunc *t = ptr;
+    printf("INODE:\n inum %d\n size %d\n", t->inum, (int)t->new_size);
 }
-void read_log_delete(rec->data)
+void read_log_delete(void *ptr)
 {
+    struct log_delete *d = ptr;
+    printf("DELETE:\n parent %d\n inum %d\n name %*s\n",
+           d->parent, d->inum, d->namelen, d->name);    
 }
-void read_log_symlink(rec->data)
+void read_log_symlink(void *ptr)
 {
+    struct log_symlink *s = ptr;
+    printf("LINK:\n inum %d\n target %*s\n",
+           s->inum, s->len, s->target);    
 }
-void read_log_rename(rec->data)
+void read_log_rename(void *ptr)
 {
+    struct log_rename *r = ptr;
+    printf("RENAME:\n inum %d\n srci %d\n dsti %d\n src %*s\n dst %*s\n",
+           r->inum, r->parent1, r->parent2, r->name1_len, r->name,
+           r->name2_len, &r->name[r->name1_len]);
 }
 
 int main(int argc, char **argv)
@@ -117,7 +138,7 @@ int main(int argc, char **argv)
     while (rec < end) {
 	switch (rec->type) {
 	case LOG_DATA:
-	    read_log_data(idx, rec->data);
+	    read_log_data(rec->data);
             break;
 	case LOG_INODE:
 	    read_log_inode(rec->data);
@@ -138,11 +159,9 @@ int main(int argc, char **argv)
             printf("null\n");
 	    break;
 	default:
-	    return -1;
+            printf("bad\n");
 	}
 	rec = (void*)&rec->data[rec->len + 2];
     }
     return 0;
-}
-
 }
