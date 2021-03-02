@@ -1,0 +1,20 @@
+### Tue Mar  2 10:34:58 2021:
+
+High-level FUSE interface passes all HW3 tests. Things to consider doing now:
+
+- connect to FUSE and actually try it
+- re-target to low-level FUSE interface?
+- test driver for low-level FUSE interface
+- ?? round header to even block size? is that at all useful?
+- S3 storage backend
+
+The data path was the easy part - next comes adding metadata persistence.
+
+- for first metadata write, all data is in memory, just write it out
+- simple strategy:
+  - read all metadata not in memory
+  - write all metadata
+  - drop all metadata? 
+
+
+-- not done yet...
