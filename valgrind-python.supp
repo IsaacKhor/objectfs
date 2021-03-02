@@ -1,0 +1,31 @@
+{
+   ADDRESS_IN_RANGE/Invalid read of size 4
+   Memcheck:Addr4
+   obj:/usr/bin/python2.7
+}
+
+{
+   ADDRESS_IN_RANGE/Conditional jump or move depends on uninitialised value
+   Memcheck:Cond
+   obj:/usr/bin/python2.7
+}
+
+{
+   ADDRESS_IN_RANGE/Conditional jump or move depends on uninitialised value(s)
+   Memcheck:Cond
+   obj:/usr/bin/python2.7
+}
+
+{
+   ADDRESS_IN_RANGE/Conditional jump or move depends on uninitialised value(s)
+   Memcheck:Cond
+   obj:/usr/lib/python2.7/lib-dynload/_ctypes.x86_64-linux-gnu.so
+}
+
+{
+   ADDRESS_IN_RANGE/Use of uninitialised value of size 8
+   Memcheck:Value8
+   obj:/usr/bin/python2.7
+}
+
+
