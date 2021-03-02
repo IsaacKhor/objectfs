@@ -115,6 +115,23 @@ public:
     }
 
     void update(int64_t offset, extent e) {
+	// two special cases
+	// (1) map is empty - just add and we're done
+	//
+	if (the_map.empty()) {
+	    the_map[offset] = e;
+	    return;
+	}
+
+	// extending the last extent
+	//
+	auto [key, val] = *(--the_map.end());
+	if (offset == key + val.len && e.offset == val.offset + val.len) {
+	    val.len += e.len;
+	    the_map[key] = val;
+	    return;
+	}
+	
 	auto it = the_map.lower_bound(offset);
 
 	// we're at the the end of the list
@@ -496,6 +513,8 @@ int read_log_data(int idx, log_data *d)
     return 0;
 }
 
+int next_inode = 2;
+
 int read_log_create(log_create *c)
 {
     auto it = inode_map.find(c->parent_inum);
@@ -504,7 +523,9 @@ int read_log_create(log_create *c)
 
     fs_directory *d = (fs_directory*) inode_map[c->parent_inum];
     auto name = std::string(&c->name[0], c->namelen);
-    d->dirents[name] = d->inum;
+    d->dirents[name] = c->inum;
+
+    next_inode = std::max(next_inode, (int)(c->inum + 1));
     
     return 0;
 }
@@ -657,8 +678,19 @@ void init_stuff(const char *prefix)
 
 void write_inode(fs_obj *f);
 
+int verbose;
+
+extern "C" int test_function(int);
+int test_function(int v)
+{
+    verbose = v;
+    return 0;
+}
+
 void printout(void *hdr, int hdrlen)
 {
+    if (!verbose)
+	return;
     uint8_t *p = (uint8_t*) hdr;
     for (int i = 0; i < hdrlen; i++)
 	printf("%02x", p[i]);
@@ -707,13 +739,16 @@ void sync(void)
     write_everything_out();
 }
 
+void maybe_write(void)
+{
+    if ((meta_offset() > meta_log_len) ||
+	(data_offset() > data_log_len))
+	write_everything_out();
+}
+
 void make_record(const void *hdr, size_t hdrlen,
 		 const void *data, size_t datalen)
 {
-    if ((meta_offset() + hdrlen > meta_log_len) ||
-	(data_offset() + datalen > data_log_len))
-	write_everything_out();
-
     printout((void*)hdr, hdrlen);
     
     memcpy(meta_log_tail, hdr, hdrlen);
@@ -747,7 +782,7 @@ int get_offset(int index)
 int read_data(void *buf, int index, off_t offset, size_t len)
 {
     if (index == this_index) {
-	len = std::min(len, data_offset() - index);
+	len = std::min(len, data_offset() - offset);
 	memcpy(buf, offset + (char*)data_log_head, len);
 	return len;
     }
@@ -803,20 +838,24 @@ std::queue<std::string> path_fifo;
 
 static int path_2_inum(const char *path)
 {
+#if 0
+    NEED TO REMOVE ENTRIES ON RMDIR/UNLINK
     if (path_map.find(path) != path_map.end())
 	return path_map[path];
-	     
+#endif     
     auto pathvec = split(path, '/');
     int inum = vec_2_inum(pathvec);
 
+    path_map[path] = inum;
+
+#if 0
     if (inum >= 0) {
 	if (path_fifo.size() >= MAX_CACHED_PATHS) {
 	    auto old = path_fifo.front();
 	    path_map.erase(old);
 	    path_fifo.pop();
 	}
-	path_map[path] = inum;
-    }
+#endif
     
     return inum;
 }
@@ -836,6 +875,7 @@ std::tuple<int,int,std::string> path_2_inum2(const char* path)
 static void obj_2_stat(struct stat *sb, fs_obj *in)
 {
     memset(sb, 0, sizeof(*sb));
+    sb->st_ino = in->inum;
     sb->st_mode = in->mode;
     sb->st_nlink = 1;
     sb->st_uid = in->uid;
@@ -919,11 +959,10 @@ int fs_write(const char *path, const char *buf, size_t len,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
     f->extents.update(offset, e);
     dirty_inodes.insert(f);
+    maybe_write();
     
     return len;
 }
-
-int next_inode = 2;
 
 void write_inode(fs_obj *f)
 {
@@ -991,8 +1030,9 @@ int fs_mkdir(const char *path, mode_t mode)
     xclock_gettime(CLOCK_REALTIME, &parent->mtime);
     dirty_inodes.insert(parent);
     
-    write_inode(dir);		// can't rely on dirty_inodes
+    write_inode(dir);	// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
+    maybe_write();
 
     return 0;
 }
@@ -1036,9 +1076,9 @@ int fs_rmdir(const char *path)
     
     xclock_gettime(CLOCK_REALTIME, &parent->mtime);
     dirty_inodes.insert(parent);
-    
     do_log_delete(parent_inum, inum, leaf);
-
+    maybe_write();
+    
     return 0;
 }
 
@@ -1056,7 +1096,7 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
 	return -ENOTDIR;
     
     inum = next_inode++;
-    fs_obj *f = new fs_obj;
+    fs_file *f = new fs_file;	// yeah, OBJ_OTHER gets a useless extent map
 
     f->type = type;
     f->inum = inum;
@@ -1072,11 +1112,12 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
     inode_map[inum] = f;
     dir->dirents[leaf] = inum;
 
-    write_inode(f);		// can't rely on dirty_inodes
+    write_inode(f);	// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
-
+    
     xclock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
+    maybe_write();
     
     return 0;
 }
@@ -1084,7 +1125,7 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
 // only called for regular files
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
-    return create_node(path, mode, OBJ_FILE, 0);
+    return create_node(path, mode | S_IFREG, OBJ_FILE, 0);
 }
 
 // for device files, FIFOs, etc.
@@ -1123,6 +1164,10 @@ int fs_truncate(const char *path, off_t len)
     do_trunc(f, len);
     do_log_trunc(inum, len);
 
+    xclock_gettime(CLOCK_REALTIME, &f->mtime);
+    dirty_inodes.insert(f);
+    maybe_write();
+    
     return 0;
 }
 
@@ -1134,6 +1179,9 @@ int fs_unlink(const char *path)
     if (inum < 0)
 	return inum;
     fs_obj *obj = inode_map[inum];
+    if (obj->type == OBJ_DIR)
+	return -EISDIR;
+    
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
 
     dir->dirents.erase(leaf);
@@ -1146,7 +1194,8 @@ int fs_unlink(const char *path)
 	do_log_trunc(inum, 0);
     }
     do_log_delete(parent_inum, inum, leaf);
-
+    maybe_write();
+    
     return 0;
 }
 
@@ -1200,6 +1249,7 @@ int fs_rename(const char *src_path, const char *dst_path)
     dirty_inodes.insert(dstdir);
     
     do_log_rename(src_inum, src_parent, dst_parent, src_leaf, dst_leaf);
+    maybe_write();
     
     return 0;
 }
@@ -1213,7 +1263,8 @@ int fs_chmod(const char *path, mode_t mode)
     fs_obj *obj = inode_map[inum];
     obj->mode = mode | (S_IFMT & obj->mode);
     dirty_inodes.insert(obj);
-
+    maybe_write();
+    
     return 0;
 }
 
@@ -1231,7 +1282,8 @@ int fs_utimens(const char *path, const struct timespec tv[2])
     else if (tv[1].tv_nsec != UTIME_OMIT)
 	obj->mtime = tv[1];
     dirty_inodes.insert(obj);
-
+    maybe_write();
+    
     return 0;
 }
 
@@ -1325,7 +1377,8 @@ int fs_symlink(const char *path, const char *contents)
     
     xclock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
-
+    maybe_write();
+    
     return 0;
 }
 

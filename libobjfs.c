@@ -39,7 +39,7 @@ struct fuse_context *fuse_get_context(void)
 }
 
 struct dirent {
-    char name[64];
+    char name[256];
     struct stat sb;
 };
 struct dir_state {
@@ -53,7 +53,7 @@ static int filler(void *buf, const char *name, const struct stat *sb, off_t off)
     struct dir_state *d = buf;
     if (d->i >= d->max)
         return -ENOMEM;
-    strncpy(d->de[d->i].name, name, 64);
+    strncpy(d->de[d->i].name, name, 256);
     d->de[d->i].sb = *sb;
     d->i++;
     return 0;

@@ -26,8 +26,10 @@ class stat(Structure):
                 ]
 
 class dirent(Structure):
-    _fields_ = [("name", c_char * 64),	# 0
-                ("_pad0", c_char * 24),	# 64
+    _fields_ = [("name", c_char * 256),	  # 0
+                ("st_dev", c_longlong),	  # 64
+                ("st_ino", c_longlong),	  # 72
+                ("st_nlink", c_longlong), # 80
                 ("st_mode", c_int),	# 88
                 ("st_uid", c_int),	# 92
                 ("st_gid", c_int),	# 96
@@ -73,6 +75,8 @@ null_fi = fuse_file_info()
 dir = os.getcwd()
 lib = CDLL(dir + "/libobjfs.so")
 assert lib
+
+verbose = c_int.in_dll(lib, "verbose")
 
 def xbytes(path):
     if sys.version_info > (3,0):
@@ -146,7 +150,7 @@ def read(path, len, offset):
 
 def write(path, data, offset):
     nbytes = len(data)
-    val = lib.py_write(xbytes(path), xbytes(data), c_int(nbytes),
+    val = lib.py_write(xbytes(path), data, c_int(nbytes),
                                c_int(offset), byref(null_fi))
     return val
 
