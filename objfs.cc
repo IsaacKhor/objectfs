@@ -63,10 +63,10 @@ extern "C" int fs_readlink(const char *path, char *buf, size_t len);
 extern "C" int fs_statfs(const char *path, struct statvfs *st);
 extern "C" int fs_fsync(const char * path, int, struct fuse_file_info *fi);
 extern "C" int fs_truncate(const char *path, off_t len);
-extern "C" int initialize(const char*);
-extern "C" int mkfs(const char*);
-extern "C" void sync(void);
-extern "C" void teardown(void);
+extern "C" int fs_initialize(const char*);
+extern "C" int fs_mkfs(const char*);
+extern "C" void fs_sync(void);
+extern "C" void fs_teardown(void);
 
 void xclock_gettime(int x, struct timespec *time)
 {
@@ -734,8 +734,9 @@ void write_everything_out(void)
     data_log_tail = data_log_head;
 }
 
-void sync(void)
+void fs_sync(void)
 {
+    *(char*)0 = 0;
     write_everything_out();
 }
 
@@ -1425,7 +1426,7 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
     return 0;
 }
 
-int initialize(const char *prefix)
+int fs_initialize(const char *prefix)
 {
     init_stuff(prefix);
     
@@ -1445,7 +1446,7 @@ int initialize(const char *prefix)
     return 0;
 }
 
-void teardown(void)
+void fs_teardown(void)
 {
     for (auto it = inode_map.begin(); it != inode_map.end();
 	 it = inode_map.erase(it)) ;
@@ -1476,7 +1477,7 @@ void teardown(void)
     next_inode = 2;
 }
 
-int mkfs(const char *prefix)
+int fs_mkfs(const char *prefix)
 {
     if (this_index != 0)
 	return -1;

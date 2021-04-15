@@ -9,6 +9,9 @@
 #include <sys/stat.h>
 #include <fuse.h>
 #include <string.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <malloc.h>
 
 extern int fs_getattr(const char *path, struct stat *sb);
 extern int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
@@ -31,11 +34,63 @@ extern int fs_statfs(const char *path, struct statvfs *st);
 extern int fs_fsync(const char * path, int, struct fuse_file_info *fi);
 extern int fs_truncate(const char *path, off_t len);
 
-struct fuse_context ctx = {.uid = 500, .gid = 500};
-
+struct fuse_context ctx;
 struct fuse_context *fuse_get_context(void)
 {
+    ctx.uid = getuid();
+    ctx.gid = getgid();
     return &ctx;
+}
+
+jmp_buf bail_buf;
+int segv_was_called;
+
+void segv_handler(int sig)
+{
+    segv_was_called = 1;
+    longjmp(bail_buf, 1);
+}
+
+extern void* debug_malloc(size_t rawSize);
+extern void* debug_calloc(size_t size1, size_t size2);
+extern void* debug_realloc(void* start, size_t size);
+extern void debug_free(void* memory);
+
+void *malloc_hook(size_t size, const void *caller)
+{
+    return debug_malloc(size);
+}
+void free_hook(void *val, const void *caller)
+{
+    debug_free(val);
+}
+void *realloc_hook(void *ptr, size_t size, const void *caller)
+{
+    return debug_realloc(ptr, size);
+}
+
+void *old_malloc_hook;
+void *old_realloc_hook;
+void *old_free_hook;
+
+void set_handler(void)
+{
+    signal(SIGSEGV, segv_handler);
+
+    old_malloc_hook = __malloc_hook;
+    old_free_hook = __free_hook;
+    old_realloc_hook = __realloc_hook;
+
+    __malloc_hook = malloc_hook;
+    __free_hook = free_hook;
+    __realloc_hook = realloc_hook;
+}
+
+void unset_handler(void)
+{
+    __malloc_hook = old_malloc_hook;
+    __free_hook = old_free_hook;
+    __realloc_hook = old_realloc_hook;
 }
 
 struct dirent {
@@ -59,54 +114,117 @@ static int filler(void *buf, const char *name, const struct stat *sb, off_t off)
     return 0;
 }
 
+int py_getattr(const char *path, struct stat *sb)
+{
+    set_handler();
+    if (setjmp(bail_buf)) {
+        unset_handler();
+        return 0;
+    }    
+    void *v = malloc(10);
+    free(v);
+    int val = fs_getattr(path, sb);
+    unset_handler();
+    return val;
+}
+
 int py_readdir(const char *path, int *n, struct dirent *de,
                struct fuse_file_info *fi)
 {
-    struct dir_state ds = {.max = *n, .i = 0, .de = de};
-    int val = fs_readdir(path, &ds, filler, 0, fi);
-    *n = ds.i;
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        struct dir_state ds = {.max = *n, .i = 0, .de = de};
+        val = fs_readdir(path, &ds, filler, 0, fi);
+        *n = ds.i;
+    }
+    unset_handler();
     return val;
 }
 
 int py_create(const char *path, unsigned int mode, struct fuse_file_info *fi)
 {
-    return fs_create(path, mode, fi);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val = fs_create(path, mode, fi);
+    }
+    unset_handler();
+    return val;
 }
 
 int py_mkdir(const char *path, unsigned int mode)
 {
-    return fs_mkdir(path, mode);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val = fs_mkdir(path, mode);
+    }
+    unset_handler();
+    return val;
 }
 
 int py_truncate(const char *path, unsigned int len)
 {
-    return fs_truncate(path, len);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val = fs_truncate(path, len);
+    }
+    unset_handler();
+    return val;
 }
 
 int py_unlink(const char *path)
 {
-    return fs_unlink(path);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val = fs_unlink(path);
+    }
+    unset_handler();
+    return val;
 }
 
 int py_rmdir(const char *path)
 {
-    return fs_rmdir(path);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val =  fs_rmdir(path);
+    }
+    unset_handler();
+    return val;
 }
 
 int py_rename(const char *path1, const char *path2)
 {
-    return fs_rename(path1, path2);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val = fs_rename(path1, path2);
+    }
+    unset_handler();
+    return val;
 }
 
 int py_chmod(const char *path, unsigned int mode)
 {
-    return fs_chmod(path, mode);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val = fs_chmod(path, mode);
+    }
+    unset_handler();
+    return val;
 }
 
 #if 0
 FIX TO USE utimesns
 int py_utime(const char *path, unsigned int actime, unsigned int modtime)
 {
+    int val = 0;
+    set_handler();
     struct utimbuf u = {.actime = actime, .modtime = modtime};
     return fs_utime(path, &u);
 }
@@ -115,17 +233,55 @@ int py_utime(const char *path, unsigned int actime, unsigned int modtime)
 int py_read(const char *path, char *buf, unsigned int len, unsigned int offset,
              struct fuse_file_info *fi)
 {
-    return fs_read(path, buf, len, offset, fi);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val = fs_read(path, buf, len, offset, fi);
+    }
+    unset_handler();
+    return val;
 }
 
 int py_write(const char *path, const char *buf, unsigned int  len,
               unsigned int offset, struct fuse_file_info *fi)
 {
-    return fs_write(path, buf, len, offset, fi);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val = fs_write(path, buf, len, offset, fi);
+    }
+    unset_handler();
+    return val;
 }
 
 int py_statfs(const char *path, struct statvfs *st)
 {
-    return fs_statfs(path, st);
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) {
+        val = fs_statfs(path, st);
+    }
+    unset_handler();
+    return val;
+}
+
+extern void fs_sync(void);
+void py_sync(void)
+{
+    set_handler();
+    if (setjmp(bail_buf) == 0) 
+        fs_sync();
+    unset_handler();
+}
+
+extern int fs_initialize(const char *prefix); 
+int py_init(const char *prefix)
+{
+    int val = 0;
+    set_handler();
+    if (setjmp(bail_buf) == 0) 
+        val = fs_initialize(prefix);
+    unset_handler();
+    return val;
 }
 
