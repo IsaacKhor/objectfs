@@ -217,30 +217,63 @@ enum obj_type {
     OBJ_OTHER = 4
 };
 
+/* maybe have a factory that creates the appropriate object type
+ * given a pointer to its encoding.
+ * need a standard method to serialize an object.
+ */
+
+/* serializes in its in-memory layout. 
+ * Except maybe packed or something.
+ * oh, actually use 1st 4 bytes for type/length
+ */
 class fs_obj {
 public:
-    int8_t          type;
+    uint32_t        type : 4;
+    uint32_t        len : 28;	// of serialized metadata
     uint32_t        inum;
     uint32_t        mode;
     uint32_t        uid, gid;
     uint32_t        rdev;
     int64_t         size;
     struct timespec mtime;
+    size_t serialize(void *);
 };
 
+/* serializes to inode + extent array
+ * No extent count needed - can just use the size field
+ *
+ * actually the extent might be packed somewhat - 
+ * we can get it down to 12 bytes
+ *  - objnum      : 40
+ *  - offset      : 30
+ *  - len         : 20
+ *  - flags/cruft : 6
+ */
 class fs_file : public fs_obj {
 public:
     extmap  extents;
+    size_t serialize(void*);
 };
 
+/* directory entry serializes as:
+ *  - uint32 inode #
+ *  - uint32 byte offset
+ *  - uint32 byte length
+ *  - uint8  namelen
+ *  - char   name[]
+ */
 class fs_directory : public fs_obj {
 public:
     std::map<std::string,uint32_t> dirents;
+    size_t serialize(void*);
 };
 
+/* extra space in entry is just the target
+ */
 class fs_link : public fs_obj {
 public:
     std::string target;
+    size_t serialize(void*);
 };
 
 /****************
@@ -514,6 +547,38 @@ int read_log_data(int idx, log_data *d)
 }
 
 int next_inode = 2;
+
+/* checkpoint has fields:
+ * .. same obj header w/ type=2 ..
+ * root inode #, offset, len
+ * next inode #
+ * inode table offset : u32
+ *  [stuff]
+ * inode table []:
+ *    - u32 inum 
+ *    - u32 offset
+ *    - u32 len
+ * this allows us to generate the inode table as we serialize all the
+ * objects. 
+ */
+
+/* follows the obj_header 
+ */
+struct ckpt_header  {
+    uint32_t root_inum;
+    uint32_t root_offset;
+    uint32_t root_len;
+    uint32_t next_inum;
+    uint32_t itable_offset;
+    /* itable_len is implicit */
+    char     data[];
+};
+
+struct itable_entry {		// need to add obj#
+    uint32_t inum;
+    uint32_t offset;
+    uint32_t len;
+};
 
 int read_log_create(log_create *c)
 {
