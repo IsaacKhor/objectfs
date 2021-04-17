@@ -736,7 +736,6 @@ void write_everything_out(void)
 
 void fs_sync(void)
 {
-    *(char*)0 = 0;
     write_everything_out();
 }
 

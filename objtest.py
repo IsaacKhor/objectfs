@@ -98,7 +98,7 @@ def init(pfx):
     return lib.py_init(xbytes(pfx))
 
 def teardown():
-    lib.py_teardown()
+    lib.fs_teardown()
 
 def getattr(path):
     sb = stat()

@@ -51,46 +51,14 @@ void segv_handler(int sig)
     longjmp(bail_buf, 1);
 }
 
-extern void* debug_malloc(size_t rawSize);
-extern void* debug_calloc(size_t size1, size_t size2);
-extern void* debug_realloc(void* start, size_t size);
-extern void debug_free(void* memory);
-
-void *malloc_hook(size_t size, const void *caller)
-{
-    return debug_malloc(size);
-}
-void free_hook(void *val, const void *caller)
-{
-    debug_free(val);
-}
-void *realloc_hook(void *ptr, size_t size, const void *caller)
-{
-    return debug_realloc(ptr, size);
-}
-
-void *old_malloc_hook;
-void *old_realloc_hook;
-void *old_free_hook;
-
 void set_handler(void)
 {
     signal(SIGSEGV, segv_handler);
-
-    old_malloc_hook = __malloc_hook;
-    old_free_hook = __free_hook;
-    old_realloc_hook = __realloc_hook;
-
-    __malloc_hook = malloc_hook;
-    __free_hook = free_hook;
-    __realloc_hook = realloc_hook;
 }
 
 void unset_handler(void)
 {
-    __malloc_hook = old_malloc_hook;
-    __free_hook = old_free_hook;
-    __realloc_hook = old_realloc_hook;
+    return;
 }
 
 struct dirent {
