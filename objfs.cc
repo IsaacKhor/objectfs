@@ -81,9 +81,9 @@ void xclock_gettime(int x, struct timespec *time)
  * Yet another extent map...
  */
 struct extent {
-    int64_t  objnum;
-    uint32_t offset;
-    uint32_t len;
+    uint32_t objnum;
+    uint32_t offset;		// within object (bytes)
+    uint32_t len;		// (bytes)
 };
     
 typedef std::map<int64_t,extent> internal_map;
@@ -94,7 +94,8 @@ class extmap {
 public:
     internal_map::iterator begin() { return the_map.begin(); }
     internal_map::iterator end() { return the_map.end(); }
-
+    int size() { return the_map.size(); }
+    
     // returns one of:
     // - extent containing @offset
     // - lowest extent with base > @offset
@@ -236,8 +237,20 @@ public:
     uint32_t        rdev;
     int64_t         size;
     struct timespec mtime;
-    size_t serialize(void *);
+    size_t length(void) {return sizeof(fs_obj);}
+    size_t serialize(void *p, size_t l);
 };
+
+/* note that all the serialization routines are risky, because we're
+ * using the object in-memory layout itself, so any change to the code
+ * might change the on-disk layout.
+ */
+size_t fs_obj::serialize(void *p, size_t l)
+{
+    memcpy(p, this, std::min(l, sizeof(*this)));
+    ((fs_obj*)p)->len = sizeof(*this);
+    return sizeof(*this);
+}
 
 /* serializes to inode + extent array
  * No extent count needed - can just use the size field
@@ -249,31 +262,119 @@ public:
  *  - len         : 20
  *  - flags/cruft : 6
  */
+
+/* internal map uses the map key for the file offset
+ * export version (_xp) has explicit file_offset
+ */
+struct extent_xp {
+    int64_t  file_offset;
+    uint32_t objnum;
+    uint32_t obj_offset;
+    uint32_t len;
+};
+    
 class fs_file : public fs_obj {
 public:
     extmap  extents;
-    size_t serialize(void*);
+    size_t length(void) {
+	return sizeof(*this) + extents.size() * sizeof(extent_xp);
+    }
+    size_t serialize(void *p, size_t l);
 };
 
+size_t fs_file::serialize(void *p, size_t l)
+{
+    fs_obj *hdr = (fs_obj*)p;
+    size_t bytes = fs_obj::serialize(p, l);
+    extent_xp *e = (extent_xp*)((char*)p + bytes);
+    int limit = (l - bytes) / sizeof(*e);
+
+    // TODO - merge adjacent extents (not sure it ever happens...)
+    for (auto it = extents.begin(); it != extents.end(); it++) {
+	auto [file_offset, ext] = *it;
+	extent_xp _e = {.file_offset = file_offset, .objnum = ext.objnum,
+			.obj_offset = ext.offset, .len = ext.len};
+	if (limit > 0) {
+	    *e++ = _e;
+	    limit--;
+	}
+	bytes += sizeof(*e);
+    }
+    hdr->len = bytes;
+    return bytes;
+}
+
+typedef std::pair<uint32_t,uint32_t> offset_len;
+    
 /* directory entry serializes as:
  *  - uint32 inode #
- *  - uint32 byte offset
+ *  - uint32 byte offset [in metadata checkpoint]
  *  - uint32 byte length
  *  - uint8  namelen
  *  - char   name[]
+ *
+ * we rely on a depth-first traversal of the tree so that we know the
+ * location (in the checkpoint) of the object pointed to by each
+ * directory entry before we serialize that entry.
  */
+struct dirent_xp {
+    uint32_t inum;
+    uint32_t offset;
+    uint32_t len;
+    uint8_t  namelen;
+    char     name[0];
+} __attribute__((packed,aligned(1)));
+
 class fs_directory : public fs_obj {
 public:
     std::map<std::string,uint32_t> dirents;
-    size_t serialize(void*);
+    size_t length(void);
+    size_t serialize(void*, size_t, std::map<uint32_t,offset_len> *);
 };
+
+size_t fs_directory::length(void)
+{
+    size_t bytes = sizeof(fs_obj);
+    for (auto it = dirents.begin(); it != dirents.end(); it++) {
+	auto [name,inum] = *it;
+	bytes += (sizeof(dirent_xp) + name.length());
+    }
+    return bytes;
+}
+
+size_t fs_directory::serialize(void *p, size_t l,
+			       std::map<uint32_t,offset_len> *map)
+{
+    fs_obj *hdr = (fs_obj*)p;
+    size_t bytes = fs_obj::serialize(p, l);
+    char *ptr = bytes + (char*)p;
+    char *limit = l + (char*)p;
+    
+    for (auto it = dirents.begin(); it != dirents.end(); it++) {
+	auto [name, inum] = *it;
+	auto[offset,len] = (*map)[inum];
+	uint8_t namelen = name.length();
+	dirent_xp *de = (dirent_xp*)ptr;
+	size_t _bytes = sizeof(*de) + namelen;
+	if (ptr + _bytes < limit) {
+	    *de = (dirent_xp){.inum = inum, .offset = offset,
+			      .len = len, .namelen = namelen};
+	    char *p2 = ptr + sizeof(*de);
+	    memcpy(p2, name.c_str(), namelen);
+	    ptr += _bytes;
+	}
+	bytes += _bytes;
+    }
+    hdr->len = bytes;
+    return bytes;
+}
 
 /* extra space in entry is just the target
  */
 class fs_link : public fs_obj {
 public:
     std::string target;
-    size_t serialize(void*);
+    size_t serialize(void*p, size_t l);
 };
 
 /****************
@@ -538,7 +639,7 @@ int read_log_data(int idx, log_data *d)
     fs_file *f = (fs_file*) inode_map[d->inum];
     
     // optimization - check if it extends the previous record?
-    extent e = {.objnum = idx, .offset = d->obj_offset,
+    extent e = {.objnum = (uint32_t)idx, .offset = d->obj_offset,
 		.len = d->len};
     f->extents.update(d->file_offset, e);
     f->size = d->size;
@@ -574,8 +675,9 @@ struct ckpt_header  {
     char     data[];
 };
 
-struct itable_entry {		// need to add obj#
+struct itable_entry {
     uint32_t inum;
+    uint32_t objnum;
     uint32_t offset;
     uint32_t len;
 };
@@ -1020,7 +1122,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     make_record((void*)hdr, hdr_bytes, buf, len);
 
     // optimization - check if it extends the previous record?
-    extent e = {.objnum = this_index,
+    extent e = {.objnum = (uint32_t)this_index,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
     f->extents.update(offset, e);
     dirty_inodes.insert(f);
