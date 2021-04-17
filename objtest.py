@@ -84,18 +84,27 @@ def xbytes(path):
     else:
         return bytes(path)
 
+def segfaulted():
+    return c_int.in_dll(lib,'segv_was_called')
+
+def stacktrace():
+    return 'segfault'
+#return str(c_char_p.in_dll(lib,'segv_stack_trace').value, 'UTF-8')
+
 def mkfs(pfx):
-    return lib.mkfs(xbytes(pfx))
+    return lib.py_mkfs(xbytes(pfx))
 
 def init(pfx):
-    return lib.initialize(xbytes(pfx))
+    return lib.py_init(xbytes(pfx))
 
 def teardown():
-    lib.teardown()
+    lib.fs_teardown()
 
 def getattr(path):
     sb = stat()
-    retval = lib.fs_getattr(xbytes(path), byref(sb))
+    retval = lib.py_getattr(xbytes(path), byref(sb))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return retval, sb
 
 dir_max = 128
@@ -103,6 +112,8 @@ def readdir(path):
     des = (dirent * dir_max)()
     n = c_int(dir_max)
     val = lib.py_readdir(xbytes(path), byref(n), byref(des), byref(null_fi))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     if val >= 0:
         return val, des[0:n.value]
     else:
@@ -110,40 +121,58 @@ def readdir(path):
 
 def create(path, mode):
     retval = lib.py_create(xbytes(path), c_int(mode), byref(null_fi))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return retval
 
 def mkdir(path, mode):
     print('mkdir path:', path)
     retval = lib.py_mkdir(xbytes(path), c_int(mode))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return retval
 
 def truncate(path, offset):
     retval = lib.py_truncate(xbytes(path), c_int(offset))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return retval
 
 def unlink(path):
     retval = lib.py_unlink(xbytes(path))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return retval
 
 def rmdir(path):
     retval = lib.py_rmdir(xbytes(path))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return retval
 
 def rename(path1, path2):
     retval = lib.py_rename(xbytes(path1), xbytes(path2))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return retval
 
 def chmod(path, mode):
     retval = lib.py_chmod(xbytes(path), c_int(mode))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return retval
 
 def utime(path, actime, modtime):
     retval = lib.py_utime(xbytes(path), c_int(actime), c_int(modtime))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return retval
 
 def read(path, len, offset):
     buf = (c_char * len)()
     val = lib.py_read(xbytes(path), buf, c_int(len), c_int(offset), byref(null_fi))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     if val < 0:
         return val,''
     return val, buf[0:val]
@@ -152,10 +181,12 @@ def write(path, data, offset):
     nbytes = len(data)
     val = lib.py_write(xbytes(path), data, c_int(nbytes),
                                c_int(offset), byref(null_fi))
+    if segfaulted():
+        raise AssertionError(stacktrace())
     return val
 
 def sync():
-    lib.sync()
+    lib.py_sync()
     
 S_IFMT  = 0o0170000  # bit mask for the file type bit field
 S_IFREG = 0o0100000  # regular file
