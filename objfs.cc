@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <time.h>
 #include <string.h>
+#include <sstream>
 
 extern "C" int fs_getattr(const char *path, struct stat *sb);
 extern "C" int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
@@ -238,18 +239,19 @@ public:
     int64_t         size;
     struct timespec mtime;
     size_t length(void) {return sizeof(fs_obj);}
-    size_t serialize(void *p, size_t l);
+    size_t serialize(std::ostream &s);
 };
 
 /* note that all the serialization routines are risky, because we're
  * using the object in-memory layout itself, so any change to the code
  * might change the on-disk layout.
  */
-size_t fs_obj::serialize(void *p, size_t l)
+size_t fs_obj::serialize(std::ostream &s)
 {
-    memcpy(p, this, std::min(l, sizeof(*this)));
-    ((fs_obj*)p)->len = sizeof(*this);
-    return sizeof(*this);
+    fs_obj hdr = *this;
+    size_t bytes = hdr.len = sizeof(hdr);
+    s.write((char*)&hdr, sizeof(hdr));
+    return bytes;
 }
 
 /* serializes to inode + extent array
@@ -276,31 +278,28 @@ struct extent_xp {
 class fs_file : public fs_obj {
 public:
     extmap  extents;
-    size_t length(void) {
-	return sizeof(*this) + extents.size() * sizeof(extent_xp);
-    }
-    size_t serialize(void *p, size_t l);
+    size_t length(void);
+    size_t serialize(std::ostream &s);
 };
 
-size_t fs_file::serialize(void *p, size_t l)
+size_t fs_file::length(void)
 {
-    fs_obj *hdr = (fs_obj*)p;
-    size_t bytes = fs_obj::serialize(p, l);
-    extent_xp *e = (extent_xp*)((char*)p + bytes);
-    int limit = (l - bytes) / sizeof(*e);
+    return sizeof(*this) + extents.size() * sizeof(extent_xp);
+}
+
+size_t fs_file::serialize(std::ostream &s)
+{
+    fs_obj hdr = *this;
+    size_t bytes = hdr.len = length();
+    s.write((char*)&hdr, sizeof(hdr));
 
     // TODO - merge adjacent extents (not sure it ever happens...)
     for (auto it = extents.begin(); it != extents.end(); it++) {
 	auto [file_offset, ext] = *it;
 	extent_xp _e = {.file_offset = file_offset, .objnum = ext.objnum,
 			.obj_offset = ext.offset, .len = ext.len};
-	if (limit > 0) {
-	    *e++ = _e;
-	    limit--;
-	}
-	bytes += sizeof(*e);
+	s.write((char*)&_e, sizeof(_e));
     }
-    hdr->len = bytes;
     return bytes;
 }
 
@@ -329,7 +328,7 @@ class fs_directory : public fs_obj {
 public:
     std::map<std::string,uint32_t> dirents;
     size_t length(void);
-    size_t serialize(void*, size_t, std::map<uint32_t,offset_len> *);
+    size_t serialize(std::ostream &s, std::map<uint32_t,offset_len> &m);
 };
 
 size_t fs_directory::length(void)
@@ -342,30 +341,22 @@ size_t fs_directory::length(void)
     return bytes;
 }
 
-size_t fs_directory::serialize(void *p, size_t l,
-			       std::map<uint32_t,offset_len> *map)
+size_t fs_directory::serialize(std::ostream &s,
+			     std::map<uint32_t,offset_len> &map)
 {
-    fs_obj *hdr = (fs_obj*)p;
-    size_t bytes = fs_obj::serialize(p, l);
-    char *ptr = bytes + (char*)p;
-    char *limit = l + (char*)p;
+    fs_obj hdr = *this;
+    size_t bytes = hdr.len = length();
+    s.write((char*)&hdr, sizeof(hdr));
     
     for (auto it = dirents.begin(); it != dirents.end(); it++) {
 	auto [name, inum] = *it;
-	auto[offset,len] = (*map)[inum];
+	auto[offset,len] = map[inum];
 	uint8_t namelen = name.length();
-	dirent_xp *de = (dirent_xp*)ptr;
-	size_t _bytes = sizeof(*de) + namelen;
-	if (ptr + _bytes < limit) {
-	    *de = (dirent_xp){.inum = inum, .offset = offset,
-			      .len = len, .namelen = namelen};
-	    char *p2 = ptr + sizeof(*de);
-	    memcpy(p2, name.c_str(), namelen);
-	    ptr += _bytes;
-	}
-	bytes += _bytes;
+	dirent_xp de = {.inum = inum, .offset = offset,
+			.len = len, .namelen = namelen};
+	s.write((char*)&de, sizeof(de));
+	s.write(name.c_str(), namelen);
     }
-    hdr->len = bytes;
     return bytes;
 }
 
@@ -374,8 +365,24 @@ size_t fs_directory::serialize(void *p, size_t l,
 class fs_link : public fs_obj {
 public:
     std::string target;
-    size_t serialize(void*p, size_t l);
+    size_t length(void);
+    size_t serialize(std::ostream &s);
 };
+
+size_t fs_link::length(void)
+{
+    return sizeof(fs_obj) + target.length();
+}
+
+size_t fs_link::serialize(std::ostream &s)
+{
+    fs_obj hdr = *this;
+    size_t bytes = hdr.len = length();
+    s.write((char*)&hdr, sizeof(hdr));
+    s.write(target.c_str(), target.length());
+    return bytes;
+}
+
 
 /****************
  * file header format
@@ -479,6 +486,28 @@ struct obj_header {
  */
 std::unordered_map<uint32_t, fs_obj*>    inode_map;
 
+
+// returns new offset
+size_t serialize_tree(std::ostream &s, size_t offset, uint32_t inum,
+		      std::map<uint32_t,offset_len> &map)
+{
+    fs_obj *obj = inode_map[inum];
+    
+    if (obj->type != OBJ_DIR) {
+	size_t len = obj->serialize(s);
+	map[inum] = std::make_pair(offset, len);
+	return offset + len;
+    }
+    else {
+	fs_directory *dir = (fs_directory*)obj;
+	for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
+	    auto [name,inum2] = *it;
+	    offset = serialize_tree(s, offset, inum2, map);
+	}
+	size_t len = dir->serialize(s, map);
+	return offset + len;
+    }
+}
 
 /*
     uint32_t        inum;
@@ -649,39 +678,6 @@ int read_log_data(int idx, log_data *d)
 
 int next_inode = 2;
 
-/* checkpoint has fields:
- * .. same obj header w/ type=2 ..
- * root inode #, offset, len
- * next inode #
- * inode table offset : u32
- *  [stuff]
- * inode table []:
- *    - u32 inum 
- *    - u32 offset
- *    - u32 len
- * this allows us to generate the inode table as we serialize all the
- * objects. 
- */
-
-/* follows the obj_header 
- */
-struct ckpt_header  {
-    uint32_t root_inum;
-    uint32_t root_offset;
-    uint32_t root_len;
-    uint32_t next_inum;
-    uint32_t itable_offset;
-    /* itable_len is implicit */
-    char     data[];
-};
-
-struct itable_entry {
-    uint32_t inum;
-    uint32_t objnum;
-    uint32_t offset;
-    uint32_t len;
-};
-
 int read_log_create(log_create *c)
 {
     auto it = inode_map.find(c->parent_inum);
@@ -756,6 +752,80 @@ size_t read_hdr(int idx, void *data, size_t len)
 
 int this_index = 0;
 char *file_prefix;
+
+// more serialization
+struct itable_xp {
+    uint32_t inum;
+    uint32_t objnum;
+    uint32_t offset;
+    uint32_t len;
+};
+
+size_t serialize_itable(std::ostream &s,
+			std::map<uint32_t,offset_len> &map)
+{
+    size_t bytes = 0;
+    for (auto it = inode_map.begin(); it != inode_map.end(); it++) {
+	auto [inum, obj] = *it;
+	auto [offset, len] = map[inum];
+	itable_xp entry = {.inum = inum, .objnum = (uint32_t)this_index,
+			   .offset = offset, .len = len};
+	s.write((char*)&entry, sizeof(entry));
+	bytes += sizeof(entry);
+    }
+    return bytes;
+}
+
+/* checkpoint has fields:
+ * .. same obj header w/ type=2 ..
+ * root inode #, offset, len
+ * next inode #
+ * inode table offset : u32
+ *  [stuff]
+ * inode table []:
+ *    - u32 inum 
+ *    - u32 offset
+ *    - u32 len
+ * this allows us to generate the inode table as we serialize all the
+ * objects. 
+ */
+
+/* follows the obj_header 
+ */
+struct ckpt_header  {
+    uint32_t root_inum;
+    uint32_t root_offset;
+    uint32_t root_len;
+    uint32_t next_inum;
+    uint32_t itable_offset;
+    /* itable_len is implicit */
+    char     data[];
+};
+
+void serialize_all(void)
+{
+    int root_inum = 1;
+    ckpt_header h = {.root_inum = (uint32_t)root_inum,
+		     .next_inum = (uint32_t)next_inode};
+    std::stringstream objs;
+    std::stringstream itable;
+    std::map<uint32_t,offset_len> imap;
+    size_t objs_offset = sizeof(h);
+    
+    size_t itable_offset = serialize_tree(objs, objs_offset, root_inum, imap);
+
+    auto [_off,_len] = imap[root_inum];
+    h.root_offset = _off;
+    h.root_len = _len;
+    h.itable_offset = itable_offset;
+
+    size_t itable_len = serialize_itable(itable, imap);
+
+    // checkpoint is now in three parts:
+    // &h, sizeof(h)
+    // objs.str().c_str(), itable_offset-objs_offset
+    // itable.str().c_str(), itable_len
+}
 
 // https://docs.microsoft.com/en-us/cpp/cpp/how-to-create-and-use-shared-ptr-instances?view=msvc-160
 // not hugely useful here, but good exercise for later
