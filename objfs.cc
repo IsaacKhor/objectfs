@@ -1445,6 +1445,12 @@ int fs_initialize(const char *prefix)
     return 0;
 }
 
+void *fs_init(struct fuse_conn_info *conn)
+{
+    return NULL;
+}
+
+
 void fs_teardown(void)
 {
     for (auto it = inode_map.begin(); it != inode_map.end();
@@ -1498,23 +1504,18 @@ int fs_mkfs(const char *prefix)
     return 0;
 }
 
-#if 0
 struct fuse_operations fs_ops = {
-    .init = fs_init,
     .getattr = fs_getattr,
-    .readdir = fs_readdir,
-    .create = fs_create,
+    .readlink = fs_readlink,
     .mkdir = fs_mkdir,
     .unlink = fs_unlink,
     .rmdir = fs_rmdir,
     .rename = fs_rename,
     .chmod = fs_chmod,
-    .utime = fs_utime,
     .truncate = fs_truncate,
-    .read = fs_read,
-    .write = fs_write,
     .statfs = fs_statfs,
-//    .fsync = fs_fsync,
-    
+    .fsync = fs_fsync,
+    .init = fs_init,
+    .create = fs_create,
+    .utimens = fs_utimens,
 };
-#endif

@@ -1,8 +1,12 @@
 
 CXXFLAGS = -std=c++17 -g -Wall -shared -fPIC
-CFLAGS = -g -Wall -shared -fPIC -Wno-deprecated-declarations
+CFLAGS = -g -Wall 
 
-# " -fPIC -shared "
+objfs-mount : objfs-mount.o objfs.o
+	gcc -g $^ -o $@ -lstdc++ -lfuse
+
+libobjfs.o : CFLAGS += -shared -fPIC
+
 libobjfs.so: objfs.o libobjfs.o 
 	gcc -g $^ -o $@ -g -Wall -shared -fPIC -lstdc++ 
 
