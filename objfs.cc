@@ -32,7 +32,6 @@
 #include <string>
 #include <vector>
 #include <set>
-#include <sstream>
 #include <errno.h>
 #include <fuse.h>
 #include <queue>
@@ -43,6 +42,7 @@
 #include <time.h>
 #include <string.h>
 #include <sstream>
+#include <cassert>
 
 extern "C" int fs_getattr(const char *path, struct stat *sb);
 extern "C" int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
@@ -240,7 +240,15 @@ public:
     struct timespec mtime;
     size_t length(void) {return sizeof(fs_obj);}
     size_t serialize(std::ostream &s);
+    fs_obj(void *ptr, size_t len);
+    fs_obj(){}
 };
+
+fs_obj::fs_obj(void *ptr, size_t len)
+{
+    assert(len == sizeof(*this));
+    *this = *(fs_obj*)ptr;
+}
 
 /* note that all the serialization routines are risky, because we're
  * using the object in-memory layout itself, so any change to the code
@@ -280,8 +288,31 @@ public:
     extmap  extents;
     size_t length(void);
     size_t serialize(std::ostream &s);
+    fs_file(void *ptr, size_t len);
+    fs_file(){}
 };
 
+// de-serialize from serialized form
+//
+fs_file::fs_file(void *ptr, size_t len)
+{
+    assert(len >= sizeof(fs_obj));
+    *(fs_obj*)this = *(fs_obj*)ptr;
+    len -= sizeof(fs_obj);
+    extent_xp *ex = (extent_xp*)(sizeof(fs_obj) + (char*)ptr);
+
+    while (len > 0) {
+	extent e = {.objnum = ex->objnum,
+		    .offset = ex->obj_offset, .len = ex->len};
+	extents.update(ex->file_offset, e);
+	ex++;
+	len -= sizeof(*ex);
+    }
+    assert(len == 0);
+}
+
+// length of serialization in bytes
+//
 size_t fs_file::length(void)
 {
     return sizeof(*this) + extents.size() * sizeof(extent_xp);
@@ -329,7 +360,27 @@ public:
     std::map<std::string,uint32_t> dirents;
     size_t length(void);
     size_t serialize(std::ostream &s, std::map<uint32_t,offset_len> &m);
+    fs_directory(void *ptr, size_t len);
+    fs_directory(){};
 };
+
+// de-serialize a directory from a checkpoint
+//
+fs_directory::fs_directory(void *ptr, size_t len)
+{
+    assert(len >= sizeof(fs_obj));
+    *(fs_obj*)this = *(fs_obj*)ptr;
+    len -= sizeof(fs_obj);
+    dirent_xp *de = (dirent_xp*)(sizeof(fs_obj) + (char*)ptr);
+
+    while (len > 0) {
+	std::string name(de->name, de->namelen);
+	dirents[name] = de->inum;
+	// TODO - do something with offset/len
+	len -= (sizeof(*de) + de->namelen);
+    }
+    assert(len == 0);
+}
 
 size_t fs_directory::length(void)
 {
@@ -367,13 +418,30 @@ public:
     std::string target;
     size_t length(void);
     size_t serialize(std::ostream &s);
+    fs_link(void *ptr, size_t len);
+    fs_link(){}
 };
 
+// deserialize a symbolic link.
+//
+fs_link::fs_link(void *ptr, size_t len)
+{
+    assert(len >= sizeof(fs_obj));
+    *(fs_obj*)this = *(fs_obj*)ptr;
+    len -= sizeof(fs_obj);
+    std::string _target((char*)ptr, len);
+    target = _target;
+}
+
+// serialized length in bytes
+//
 size_t fs_link::length(void)
 {
     return sizeof(fs_obj) + target.length();
 }
 
+// serialize to an ostream
+//
 size_t fs_link::serialize(std::ostream &s)
 {
     fs_obj hdr = *this;
@@ -842,7 +910,9 @@ std::map<int,std::shared_ptr<openfile>> fd_cache;
 std::queue<std::shared_ptr<openfile>> fd_fifo;
 #define MAX_OPEN_FDS 50
 
-int get_fd(int index)
+// open "prefix.<index>" or "prefix.<index>.ck"
+//
+int get_fd(int index, bool ckpt)
 {
     // hit?
     if (fd_cache.find(index) != fd_cache.end()) {
@@ -860,7 +930,7 @@ int get_fd(int index)
 
     // open a new one
     char buf[256];
-    sprintf(buf, "%s.%08x", file_prefix, index);
+    sprintf(buf, "%s.%08x%s", file_prefix, index, ckpt ? ".ck" : "");
     int fd = open(buf, O_RDONLY);
     if (fd < 0)
 	return -1;
@@ -998,17 +1068,42 @@ void make_record(const void *hdr, size_t hdrlen,
 
 std::map<int,int> data_offsets;
 
-int get_offset(int index)
+// read at absolute offset @offset in object @index
+//
+int do_read(int index, void *buf, size_t len, size_t offset, bool ckpt)
+{
+    int fd = get_fd(index, ckpt);
+    if (fd < 0)
+	return -1;
+    return pread(fd, buf, len, offset);
+}
+
+fs_obj *load_obj(int index, uint32_t offset, size_t len)
+{
+    char buf[len];
+    size_t val = do_read(index, (void*)buf, len, offset, true);
+    if (val != len)
+	return nullptr;
+    fs_obj *o = (fs_obj*)buf;
+    if (o->type == OBJ_DIR)
+	return new fs_directory((void*)buf, len);
+    if (o->type == OBJ_FILE)
+	return new fs_file((void*)buf, len);
+    if (o->type == OBJ_SYMLINK)
+	return new fs_link((void*)buf, len);
+    return new fs_obj((void*)buf, len);
+}
+
+
+// actual offset of data in file is the offset in the extent entry
+// plus the header length. Get header length for object @index
+int get_offset(int index, bool ckpt)
 {
     if (data_offsets.find(index) != data_offsets.end())
 	return data_offsets[index];
 
-    int fd = get_fd(index);	// I should think about exceptions...
-    if (fd < 0)
-	return -1;
-    
     obj_header h;
-    size_t len = pread(fd, &h, sizeof(h), 0);
+    size_t len = do_read(index, &h, sizeof(h), 0, ckpt);
     if (len < 0)
 	return -1;
 
@@ -1016,6 +1111,9 @@ int get_offset(int index)
     return h.hdr_len;
 }
 
+// read @len bytes of file data from object @index starting at
+// data offset @offset (need to adjust for header length)
+//
 int read_data(void *buf, int index, off_t offset, size_t len)
 {
     if (index == this_index) {
@@ -1023,16 +1121,10 @@ int read_data(void *buf, int index, off_t offset, size_t len)
 	memcpy(buf, offset + (char*)data_log_head, len);
 	return len;
     }
-    
-    int fd = get_fd(index);
-    if (fd < 0)
-	return -1;
-
-    size_t n = get_offset(index);
+    size_t n = get_offset(index, false);
     if (n < 0)
 	return n;
-    
-    return pread(fd, buf, len, offset + n);
+    return do_read(index, buf, len, offset + n, false);
 }
 
 static std::vector<std::string> split(const std::string& s, char delimiter)
@@ -1046,6 +1138,12 @@ static std::vector<std::string> split(const std::string& s, char delimiter)
     }
     return tokens;
 }
+
+// TODO - how to read objects on demand? Two possibilities:
+// - in-memory directories keep offset/len information in leaves
+// - load separate in-memory table of inode->offset/len
+// first approach may not work so well when we write the next
+// checkpoint 
 
 // returns inode number or -ERROR
 // kind of conflicts with uint32_t for inode #...
@@ -1069,31 +1167,12 @@ static int vec_2_inum(std::vector<std::string> pathvec)
     return inum;
 }
 
-std::unordered_map<std::string, int> path_map;
-std::queue<std::string> path_fifo;
-#define MAX_CACHED_PATHS 100
+// TODO - cache path to inum translations?
 
 static int path_2_inum(const char *path)
 {
-#if 0
-    NEED TO REMOVE ENTRIES ON RMDIR/UNLINK
-    if (path_map.find(path) != path_map.end())
-	return path_map[path];
-#endif     
     auto pathvec = split(path, '/');
     int inum = vec_2_inum(pathvec);
-
-    path_map[path] = inum;
-
-#if 0
-    if (inum >= 0) {
-	if (path_fifo.size() >= MAX_CACHED_PATHS) {
-	    auto old = path_fifo.front();
-	    path_map.erase(old);
-	    path_fifo.pop();
-	}
-#endif
-    
     return inum;
 }
 
@@ -1667,11 +1746,11 @@ int fs_initialize(const char *prefix)
     init_stuff(prefix);
     
     for (int i = 0; ; i++) {
-	ssize_t offset = get_offset(i);
+	ssize_t offset = get_offset(i, false);
 	if (offset < 0)
 	    return 0;
 	void *buf = malloc(offset);
-	if (pread(get_fd(i), buf, offset, 0) != (int)offset)
+	if (pread(get_fd(i, false), buf, offset, 0) != (int)offset)
 	    return -1;
 	if (read_hdr(i, buf, offset) < 0)
 	    return -1;
@@ -1710,11 +1789,6 @@ void fs_teardown(void)
 
     for (auto it = data_offsets.begin(); it != data_offsets.end();
 	 it = data_offsets.erase(it));
-
-    for (auto it = path_map.begin(); it != path_map.end();
-	 it = path_map.erase(it));
-    while (!path_fifo.empty())
-	path_fifo.pop();
 
     next_inode = 2;
 }
