@@ -1103,7 +1103,7 @@ int get_offset(int index, bool ckpt)
 	return data_offsets[index];
 
     obj_header h;
-    size_t len = do_read(index, &h, sizeof(h), 0, ckpt);
+    ssize_t len = do_read(index, &h, sizeof(h), 0, ckpt);
     if (len < 0)
 	return -1;
 
@@ -1738,6 +1738,7 @@ int fs_statfs(const char *path, struct statvfs *st)
 
 int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 {
+    write_everything_out();
     return 0;
 }
 
@@ -1761,10 +1762,21 @@ int fs_initialize(const char *prefix)
     return 0;
 }
 
+
+char *prefix = NULL;
 void *fs_init(struct fuse_conn_info *conn)
 {
+    if (!prefix) {
+       exit(1);
+    }
+    fs_initialize(prefix);
     return NULL;
 }
+
+/*void *fs_init(struct fuse_conn_info *conn)
+{
+    return NULL;
+}*/
 
 
 void fs_teardown(void)
@@ -1815,6 +1827,7 @@ int fs_mkfs(const char *prefix)
     return 0;
 }
 
+/*
 struct fuse_operations fs_ops = {
     .getattr = fs_getattr,
     .readlink = fs_readlink,
@@ -1829,4 +1842,24 @@ struct fuse_operations fs_ops = {
     .init = fs_init,
     .create = fs_create,
     .utimens = fs_utimens,
+};*/
+
+struct fuse_operations fs_ops = {
+    .getattr = fs_getattr,
+    .readlink = fs_readlink,
+    .mkdir = fs_mkdir,
+    .unlink = fs_unlink,
+    .rmdir = fs_rmdir,
+    .rename = fs_rename,
+    .chmod = fs_chmod,
+    .truncate = fs_truncate,
+    .read = fs_read,
+    .write = fs_write,
+    .statfs = fs_statfs,
+    .fsync = fs_fsync,
+    .readdir = fs_readdir,
+    .init = fs_init,
+    .create = fs_create,
+    .utimens = fs_utimens,
 };
+

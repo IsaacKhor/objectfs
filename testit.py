@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import unittest
 import objtest as obj
 import os, sys
