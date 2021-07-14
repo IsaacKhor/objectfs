@@ -18,13 +18,20 @@
 #include <errno.h>
 #include <pthread.h>
 
+#include "libs3.h"
+#include "s3wrap.h"
+#include "objfs.h"
+
 /* usage: objfs-mount prefix /dir
  */
 static struct fuse_opt opts[] = {
+    {"size=%d",   -1, 0 },      /* object size to write */
     FUSE_OPT_END
 };
 
 const char *prefix;
+const char *bucket;
+int size = 1*1024*1024;
 
 /* the first non-option argument is the prefix
  */
@@ -32,7 +39,11 @@ static int myfs_opt_proc(void *data, const char *arg,
                          int key, struct fuse_args *outargs)
 {
     if (key == FUSE_OPT_KEY_NONOPT && prefix == NULL) {
-        prefix = arg;
+        sscanf(arg, "%m[^/]/%ms", &bucket, &prefix);
+        return 0;
+    }
+    if (key == FUSE_OPT_KEY_OPT && !strncmp(arg, "-size=", 6)) {
+        size = atoi(arg+6);
         return 0;
     }
     return 1;
@@ -53,11 +64,16 @@ int main(int argc, char **argv)
      */
     fuse_opt_insert_arg(&args, 1, "-oallow_other");
     fuse_opt_insert_arg(&args, 1, "-odefault_permissions");
-    fuse_opt_insert_arg(&args, 1, "-okernel_cache");
-    fuse_opt_insert_arg(&args, 1, "-oentry_timeout=1000,attr_timeout=1000");
+//    fuse_opt_insert_arg(&args, 1, "-okernel_cache");
+//    fuse_opt_insert_arg(&args, 1, "-oentry_timeout=1000,attr_timeout=1000");
+
+    struct objfs fs = { .bucket = bucket, .prefix = prefix,
+        .host = getenv("S3_HOSTNAME"), .access = getenv("S3_ACCESS_KEY_ID"),
+        .secret = getenv("S3_SECRET_ACCESS_KEY"), .use_local = 0,
+        .chunk_size = size};
 
     /* TODO: run using low-level FUSE interface
      */
-    return fuse_main(args.argc, args.argv, &fs_ops, "this is a test");
+    return fuse_main(args.argc, args.argv, &fs_ops, &fs);
 }
 

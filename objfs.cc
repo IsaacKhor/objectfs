@@ -44,36 +44,11 @@
 #include <sstream>
 #include <cassert>
 
-extern "C" int fs_getattr(const char *path, struct stat *sb);
-extern "C" int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
-                      off_t offset, struct fuse_file_info *fi);
-extern "C" int fs_write(const char *path, const char *buf, size_t len,
-                    off_t offset, struct fuse_file_info *fi);
-extern "C" int fs_mkdir(const char *path, mode_t mode);
-extern "C" int fs_rmdir(const char *path);
-extern "C" int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi);
-extern "C" int fs_mknod(const char *path, mode_t mode, dev_t dev);
-extern "C" int fs_unlink(const char *path);
-extern "C" int fs_rename(const char *src_path, const char *dst_path);
-extern "C" int fs_chmod(const char *path, mode_t mode);
-extern "C" int fs_utimens(const char *path, const struct timespec tv[2]);
-extern "C" int fs_read(const char *path, char *buf, size_t len, off_t offset,
-                   struct fuse_file_info *fi);
-extern "C" int fs_symlink(const char *path, const char *contents);
-extern "C" int fs_readlink(const char *path, char *buf, size_t len);
-extern "C" int fs_statfs(const char *path, struct statvfs *st);
-extern "C" int fs_fsync(const char * path, int, struct fuse_file_info *fi);
-extern "C" int fs_truncate(const char *path, off_t len);
-extern "C" int fs_initialize(const char*);
-extern "C" int fs_mkfs(const char*);
-extern "C" void fs_sync(void);
-extern "C" void fs_teardown(void);
-
-void xclock_gettime(int x, struct timespec *time)
-{
-    time->tv_sec = 0;
-    time->tv_nsec = 0;
-}
+#include <sys/uio.h>
+#include <list>
+#include <libs3.h>
+#include "s3wrap.h"
+#include "objfs.h"
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -819,7 +794,6 @@ size_t read_hdr(int idx, void *data, size_t len)
 
 
 int this_index = 0;
-char *file_prefix;
 
 // more serialization
 struct itable_xp {
@@ -895,54 +869,6 @@ void serialize_all(void)
     // itable.str().c_str(), itable_len
 }
 
-// https://docs.microsoft.com/en-us/cpp/cpp/how-to-create-and-use-shared-ptr-instances?view=msvc-160
-// not hugely useful here, but good exercise for later
-
-class openfile {
-public:
-    int index;
-    int fd;
-};
-
-// simple cache using FIFO eviction, much easier than implementing LRU
-//
-std::map<int,std::shared_ptr<openfile>> fd_cache;
-std::queue<std::shared_ptr<openfile>> fd_fifo;
-#define MAX_OPEN_FDS 50
-
-// open "prefix.<index>" or "prefix.<index>.ck"
-//
-int get_fd(int index, bool ckpt)
-{
-    // hit?
-    if (fd_cache.find(index) != fd_cache.end()) {
-	auto of = fd_cache[index];
-	return of->fd;
-    }
-
-    // evict?
-    if (fd_fifo.size() >= MAX_OPEN_FDS) {
-	auto of = fd_fifo.front();
-	close(of->fd);
-	fd_cache.erase(of->index);
-	fd_fifo.pop();
-    }
-
-    // open a new one
-    char buf[256];
-    sprintf(buf, "%s.%08x%s", file_prefix, index, ckpt ? ".ck" : "");
-    int fd = open(buf, O_RDONLY);
-    if (fd < 0)
-	return -1;
-    
-    auto of = std::make_shared<openfile>();
-    of->index = index;
-    of->fd = fd;
-    fd_cache[index] = of;
-    fd_fifo.push(of);
-
-    return fd;
-}
 
 /* 
    when do we decide to write? 
@@ -973,16 +899,6 @@ size_t meta_offset(void)
 //std::set<std::shared_ptr<fs_obj>> dirty_inodes;
 std::set<fs_obj*> dirty_inodes;
 
-void init_stuff(const char *prefix)
-{
-    file_prefix = strdup(prefix);
-    meta_log_len = 64 * 1024;
-    meta_log_head = meta_log_tail = malloc(meta_log_len*2);
-
-    data_log_len = 8 * 1024 * 1024;
-    data_log_head = data_log_tail = malloc(data_log_len);
-}
-
 void write_inode(fs_obj *f);
 
 int verbose;
@@ -1004,16 +920,17 @@ void printout(void *hdr, int hdrlen)
     printf("\n");
 }
 
-void write_everything_out(void)
+void write_everything_out(struct objfs *fs)
 {
     for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
 	 it = dirty_inodes.erase(it)) {
 	write_inode(*it);
     }
 
-    char path[strlen(file_prefix) + 32];
-    sprintf(path, "%s.%08x", file_prefix, this_index);
-
+    char _key[1024];
+    sprintf(_key, "%s.%08x", fs->prefix, this_index);
+    std::string key(_key);
+    
     obj_header h = {
 	.magic = OBJFS_MAGIC,
 	.version = 1,
@@ -1022,20 +939,17 @@ void write_everything_out(void)
 	.this_index = this_index,
     };
     this_index++;
-    
-    int fd = open(path, O_WRONLY|O_CREAT|O_TRUNC, 0777);
-    if (fd < 0)
-	perror(path), exit(1);
-	/* ERROR */;
 
-    printf("writing %s:\n", path);
+    struct iovec iov[3] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
+			   {.iov_base = meta_log_head, .iov_len = meta_offset()},
+			   {.iov_base = data_log_head, .iov_len = data_offset()}};
+    
+    printf("writing %s:\n", key.c_str());
     printout((void*)&h, sizeof(h));
     printout((void*)meta_log_head, meta_offset());
 
-    write(fd, &h, sizeof(h));
-    write(fd, meta_log_head, meta_offset());
-    write(fd, data_log_head, data_offset());
-    close(fd);
+    if (S3StatusOK != fs->s3->s3_put(key, iov, 3))
+	throw "put failed";
     
     meta_log_tail = meta_log_head;
     data_log_tail = data_log_head;
@@ -1043,14 +957,15 @@ void write_everything_out(void)
 
 void fs_sync(void)
 {
-    write_everything_out();
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    write_everything_out(fs);
 }
 
-void maybe_write(void)
+void maybe_write(struct objfs *fs)
 {
     if ((meta_offset() > meta_log_len) ||
 	(data_offset() > data_log_len))
-	write_everything_out();
+	write_everything_out(fs);
 }
 
 void make_record(const void *hdr, size_t hdrlen,
@@ -1070,18 +985,20 @@ std::map<int,int> data_offsets;
 
 // read at absolute offset @offset in object @index
 //
-int do_read(int index, void *buf, size_t len, size_t offset, bool ckpt)
+int do_read(struct objfs *fs, int index, void *buf, size_t len, size_t offset, bool ckpt)
 {
-    int fd = get_fd(index, ckpt);
-    if (fd < 0)
+    char key[256];
+    sprintf(key, "%s.%08x%s", fs->prefix, index, ckpt ? ".ck" : "");
+    struct iovec iov = {.iov_base = buf, .iov_len = (size_t)len};
+    if (S3StatusOK != fs->s3->s3_get(key, offset, len, &iov, 1))
 	return -1;
-    return pread(fd, buf, len, offset);
+    return len;
 }
 
-fs_obj *load_obj(int index, uint32_t offset, size_t len)
+fs_obj *load_obj(struct objfs *fs, int index, uint32_t offset, size_t len)
 {
     char buf[len];
-    size_t val = do_read(index, (void*)buf, len, offset, true);
+    size_t val = do_read(fs, index, (void*)buf, len, offset, true);
     if (val != len)
 	return nullptr;
     fs_obj *o = (fs_obj*)buf;
@@ -1097,13 +1014,13 @@ fs_obj *load_obj(int index, uint32_t offset, size_t len)
 
 // actual offset of data in file is the offset in the extent entry
 // plus the header length. Get header length for object @index
-int get_offset(int index, bool ckpt)
+int get_offset(struct objfs *fs, int index, bool ckpt)
 {
     if (data_offsets.find(index) != data_offsets.end())
 	return data_offsets[index];
 
     obj_header h;
-    ssize_t len = do_read(index, &h, sizeof(h), 0, ckpt);
+    ssize_t len = do_read(fs, index, &h, sizeof(h), 0, ckpt);
     if (len < 0)
 	return -1;
 
@@ -1114,17 +1031,17 @@ int get_offset(int index, bool ckpt)
 // read @len bytes of file data from object @index starting at
 // data offset @offset (need to adjust for header length)
 //
-int read_data(void *buf, int index, off_t offset, size_t len)
+int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
 {
     if (index == this_index) {
 	len = std::min(len, data_offset() - offset);
 	memcpy(buf, offset + (char*)data_log_head, len);
 	return len;
     }
-    size_t n = get_offset(index, false);
+    size_t n = get_offset(fs, index, false);
     if (n < 0)
 	return n;
-    return do_read(index, buf, len, offset + n, false);
+    return do_read(fs, index, buf, len, offset + n, false);
 }
 
 static std::vector<std::string> split(const std::string& s, char delimiter)
@@ -1242,6 +1159,7 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     int inum = path_2_inum(path);
     if (inum < 0)
 	return inum;
@@ -1275,7 +1193,7 @@ int fs_write(const char *path, const char *buf, size_t len,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
     f->extents.update(offset, e);
     dirty_inodes.insert(f);
-    maybe_write();
+    maybe_write(fs);
     
     return len;
 }
@@ -1319,7 +1237,9 @@ void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
 
 int fs_mkdir(const char *path, mode_t mode)
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
+
     if (inum >= 0)
 	return -EEXIST;
     if (parent_inum < 0)
@@ -1335,7 +1255,7 @@ int fs_mkdir(const char *path, mode_t mode)
     dir->inum = inum;
     dir->mode = mode | S_IFDIR;
     dir->rdev = dir->size = 0;
-    xclock_gettime(CLOCK_REALTIME, &dir->mtime);
+    clock_gettime(CLOCK_REALTIME, &dir->mtime);
 
     struct fuse_context *ctx = fuse_get_context();
     dir->uid = ctx->uid;
@@ -1343,12 +1263,12 @@ int fs_mkdir(const char *path, mode_t mode)
     
     inode_map[inum] = dir;
     parent->dirents[leaf] = inum;
-    xclock_gettime(CLOCK_REALTIME, &parent->mtime);
+    clock_gettime(CLOCK_REALTIME, &parent->mtime);
     dirty_inodes.insert(parent);
     
     write_inode(dir);	// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
-    maybe_write();
+    maybe_write(fs);
 
     return 0;
 }
@@ -1372,6 +1292,7 @@ void do_log_delete(uint32_t parent_inum, uint32_t inum, std::string name)
 
 int fs_rmdir(const char *path)
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
     if (inum < 0)
@@ -1390,15 +1311,15 @@ int fs_rmdir(const char *path)
     parent->dirents.erase(leaf);
     delete dir;
     
-    xclock_gettime(CLOCK_REALTIME, &parent->mtime);
+    clock_gettime(CLOCK_REALTIME, &parent->mtime);
     dirty_inodes.insert(parent);
     do_log_delete(parent_inum, inum, leaf);
-    maybe_write();
+    maybe_write(fs);
     
     return 0;
 }
 
-int create_node(const char *path, mode_t mode, int type, dev_t dev)
+int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t dev)
 {
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
@@ -1419,7 +1340,7 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
     f->mode = mode;
     f->rdev = dev;
     f->size = 0;
-    xclock_gettime(CLOCK_REALTIME, &f->mtime);
+    clock_gettime(CLOCK_REALTIME, &f->mtime);
 
     struct fuse_context *ctx = fuse_get_context();
     f->uid = ctx->uid;
@@ -1431,9 +1352,9 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
     write_inode(f);	// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
     
-    xclock_gettime(CLOCK_REALTIME, &dir->mtime);
+    clock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
-    maybe_write();
+    maybe_write(fs);
     
     return 0;
 }
@@ -1441,13 +1362,17 @@ int create_node(const char *path, mode_t mode, int type, dev_t dev)
 // only called for regular files
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
-    return create_node(path, mode | S_IFREG, OBJ_FILE, 0);
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
+    return create_node(fs, path, mode | S_IFREG, OBJ_FILE, 0);
 }
 
 // for device files, FIFOs, etc.
 int fs_mknod(const char *path, mode_t mode, dev_t dev)
 {
-    return create_node(path, mode, OBJ_OTHER, dev);
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
+    return create_node(fs, path, mode, OBJ_OTHER, dev);
 }
 
 void do_log_trunc(uint32_t inum, off_t offset)
@@ -1467,6 +1392,8 @@ void do_log_trunc(uint32_t inum, off_t offset)
 
 int fs_truncate(const char *path, off_t len)
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
     int inum = path_2_inum(path);
     if (inum < 0)
 	return inum;
@@ -1480,9 +1407,9 @@ int fs_truncate(const char *path, off_t len)
     do_trunc(f, len);
     do_log_trunc(inum, len);
 
-    xclock_gettime(CLOCK_REALTIME, &f->mtime);
+    clock_gettime(CLOCK_REALTIME, &f->mtime);
     dirty_inodes.insert(f);
-    maybe_write();
+    maybe_write(fs);
     
     return 0;
 }
@@ -1491,6 +1418,8 @@ int fs_truncate(const char *path, off_t len)
  */
 int fs_unlink(const char *path)
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
     if (inum < 0)
 	return inum;
@@ -1501,7 +1430,7 @@ int fs_unlink(const char *path)
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
 
     dir->dirents.erase(leaf);
-    xclock_gettime(CLOCK_REALTIME, &dir->mtime);
+    clock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
 
     if (obj->type == OBJ_FILE) {
@@ -1510,7 +1439,7 @@ int fs_unlink(const char *path)
 	do_log_trunc(inum, 0);
     }
     do_log_delete(parent_inum, inum, leaf);
-    maybe_write();
+    maybe_write(fs);
     
     return 0;
 }
@@ -1540,6 +1469,8 @@ void do_log_rename(int src_inum, int src_parent, int dst_parent,
 
 int fs_rename(const char *src_path, const char *dst_path)
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
     auto [src_inum, src_parent, src_leaf] = path_2_inum2(src_path);
     if (src_inum < 0)
 	return src_inum;
@@ -1557,21 +1488,23 @@ int fs_rename(const char *src_path, const char *dst_path)
 	return -ENOTDIR;
 
     srcdir->dirents.erase(src_leaf);
-    xclock_gettime(CLOCK_REALTIME, &srcdir->mtime);
+    clock_gettime(CLOCK_REALTIME, &srcdir->mtime);
     dirty_inodes.insert(srcdir);
 
     dstdir->dirents[dst_leaf] = src_inum;
-    xclock_gettime(CLOCK_REALTIME, &dstdir->mtime);
+    clock_gettime(CLOCK_REALTIME, &dstdir->mtime);
     dirty_inodes.insert(dstdir);
     
     do_log_rename(src_inum, src_parent, dst_parent, src_leaf, dst_leaf);
-    maybe_write();
+    maybe_write(fs);
     
     return 0;
 }
 
 int fs_chmod(const char *path, mode_t mode)
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
     int inum = path_2_inum(path);
     if (inum < 0)
 	return inum;
@@ -1579,7 +1512,7 @@ int fs_chmod(const char *path, mode_t mode)
     fs_obj *obj = inode_map[inum];
     obj->mode = mode | (S_IFMT & obj->mode);
     dirty_inodes.insert(obj);
-    maybe_write();
+    maybe_write(fs);
     
     return 0;
 }
@@ -1588,17 +1521,19 @@ int fs_chmod(const char *path, mode_t mode)
 //
 int fs_utimens(const char *path, const struct timespec tv[2])
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
     int inum = path_2_inum(path);
     if (inum < 0)
 	return inum;
 
     fs_obj *obj = inode_map[inum];
     if (tv == NULL || tv[1].tv_nsec == UTIME_NOW)
-	xclock_gettime(CLOCK_REALTIME, &obj->mtime);
+	clock_gettime(CLOCK_REALTIME, &obj->mtime);
     else if (tv[1].tv_nsec != UTIME_OMIT)
 	obj->mtime = tv[1];
     dirty_inodes.insert(obj);
-    maybe_write();
+    maybe_write(fs);
     
     return 0;
 }
@@ -1607,6 +1542,8 @@ int fs_utimens(const char *path, const struct timespec tv[2])
 int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    struct fuse_file_info *fi)
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
     int inum = path_2_inum(path);
     if (inum < 0)
 	return inum;
@@ -1634,7 +1571,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    size_t _len = e.len - skip;
 	    if (_len > len)
 		_len = len;
-	    if (read_data(buf, e.objnum, e.offset+skip, _len) < 0)
+	    if (read_data(fs, buf, e.objnum, e.offset+skip, _len) < 0)
 		return -EIO;
 	    bytes += _len;
 	    offset += _len;
@@ -1662,6 +1599,8 @@ void write_symlink(int inum, std::string target)
 
 int fs_symlink(const char *path, const char *contents)
 {
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
     if (inum >= 0)
 	return -EEXIST;
@@ -1681,7 +1620,7 @@ int fs_symlink(const char *path, const char *contents)
     l->uid = ctx->uid;
     l->gid = ctx->gid;
 
-    xclock_gettime(CLOCK_REALTIME, &l->mtime);
+    clock_gettime(CLOCK_REALTIME, &l->mtime);
 
     l->target = leaf;
     inode_map[inum] = l;
@@ -1691,9 +1630,9 @@ int fs_symlink(const char *path, const char *contents)
     write_symlink(inum, leaf);
     write_dirent(parent_inum, leaf, inum);
     
-    xclock_gettime(CLOCK_REALTIME, &dir->mtime);
+    clock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
-    maybe_write();
+    maybe_write(fs);
     
     return 0;
 }
@@ -1738,60 +1677,52 @@ int fs_statfs(const char *path, struct statvfs *st)
 
 int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 {
-    write_everything_out();
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    write_everything_out(fs);
     return 0;
 }
 
-int fs_initialize(const char *prefix)
-{
-    init_stuff(prefix);
-    
-    for (int i = 0; ; i++) {
-	ssize_t offset = get_offset(i, false);
-	if (offset < 0)
-	    return 0;
-	void *buf = malloc(offset);
-	if (pread(get_fd(i, false), buf, offset, 0) != (int)offset)
-	    return -1;
-	if (read_hdr(i, buf, offset) < 0)
-	    return -1;
-	free(buf);
-	this_index = i+1;
-    }
-
-    return 0;
-}
-
-
-char *prefix = NULL;
 void *fs_init(struct fuse_conn_info *conn)
 {
-    if (!prefix) {
-       exit(1);
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+
+    // initialization - FIXME
+    meta_log_len = 64 * 1024;
+    meta_log_head = meta_log_tail = malloc(meta_log_len*2);
+    data_log_len = 8 * 1024 * 1024;
+    data_log_head = data_log_tail = malloc(data_log_len);
+
+    fs->s3 = new s3_target(fs->host, fs->bucket, fs->access, fs->secret, false);
+
+    std::list<std::string> keys;
+    if (S3StatusOK != fs->s3->s3_list(fs->prefix, keys))
+	throw "bucket list failed";
+
+    for (auto it = keys.begin(); it != keys.end(); it++) {
+	int n;
+	printf("key: %s\n", it->c_str());
+	sscanf(it->c_str(), "%*[^.].%d", &n);
+	ssize_t offset = get_offset(fs, n, false);
+
+	if (offset < 0)
+	    throw "bad object";
+	void *buf = malloc(offset);
+	struct iovec iov[] = {{.iov_base = buf, .iov_len = (size_t)offset}};
+	if (S3StatusOK != fs->s3->s3_get(it->c_str(), 0, offset, iov, 1))
+	    throw "can't read header";
+	if (read_hdr(n, buf, offset) < 0)
+	    throw "bad header";
+	this_index = n+1;
     }
-    fs_initialize(prefix);
-    return NULL;
+
+    return (void*) fs;
 }
-
-/*void *fs_init(struct fuse_conn_info *conn)
-{
-    return NULL;
-}*/
-
 
 void fs_teardown(void)
 {
     for (auto it = inode_map.begin(); it != inode_map.end();
 	 it = inode_map.erase(it)) ;
     this_index = 0;
-
-    for (auto it = fd_cache.begin(); it != fd_cache.end(); it = fd_cache.erase(it)) {
-	auto [key, val] = *it;
-	close(val->fd);
-    }
-
-    while (!fd_fifo.empty())
-	fd_fifo.pop();
 
     for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
 	 it = dirty_inodes.erase(it));
@@ -1805,6 +1736,7 @@ void fs_teardown(void)
     next_inode = 2;
 }
 
+#if 0
 int fs_mkfs(const char *prefix)
 {
     if (this_index != 0)
@@ -1819,13 +1751,14 @@ int fs_mkfs(const char *prefix)
     root->mode = S_IFDIR | 0744;
     root->rdev = 0;
     root->size = 0;
-    xclock_gettime(CLOCK_REALTIME, &root->mtime);
+    clock_gettime(CLOCK_REALTIME, &root->mtime);
 
     write_inode(root);
-    write_everything_out();
+    write_everything_out(fs);
 
     return 0;
 }
+#endif
 
 /*
 struct fuse_operations fs_ops = {
@@ -1850,6 +1783,7 @@ struct fuse_operations fs_ops = {
     .mkdir = fs_mkdir,
     .unlink = fs_unlink,
     .rmdir = fs_rmdir,
+    .symlink = fs_symlink,
     .rename = fs_rename,
     .chmod = fs_chmod,
     .truncate = fs_truncate,
