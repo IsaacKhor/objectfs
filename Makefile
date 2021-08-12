@@ -5,7 +5,7 @@ CFLAGS = -g -Wall
 all: objfs-mount libobjfs.o libobjfs.so
 
 objfs-mount : objfs-mount.o objfs.o s3wrap.o iov.o
-	g++ -g $^ -o $@ -lfuse -ls3 -Llibs3/build/lib -L/lib/x86_64-linux-gnu
+	g++ -g $^ -o $@ -lfuse -ls3 -lcurl -lcrypto -lxml2 -Llibs3/build/lib -L/lib/x86_64-linux-gnu
 
 libobjfs.o : CFLAGS += -shared -fPIC
 
