@@ -1,6 +1,6 @@
 
-CXXFLAGS = -std=c++17 -g -Wall -shared -fPIC -Is3lib/inc
-CFLAGS = -g -Wall 
+CXXFLAGS = -std=c++17 -g -Wall -shared -fPIC -Ilibs3/inc
+CFLAGS = -g -Wall -Ilibs3/inc
 
 all: objfs-mount libobjfs.o libobjfs.so
 
