@@ -50,6 +50,11 @@
 #include "s3wrap.h"
 #include "objfs.h"
 
+#include <mutex>
+
+std::mutex global_mutex;
+std::mutex maybe_write_mutex;
+
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
 
@@ -922,6 +927,7 @@ void printout(void *hdr, int hdrlen)
 
 void write_everything_out(struct objfs *fs)
 {
+    printf("enter write everything out\n");
     for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
 	 it = dirty_inodes.erase(it)) {
 	write_inode(*it);
@@ -947,12 +953,15 @@ void write_everything_out(struct objfs *fs)
     printf("writing %s:\n", key.c_str());
     printout((void*)&h, sizeof(h));
     printout((void*)meta_log_head, meta_offset());
-
-    if (S3StatusOK != fs->s3->s3_put(key, iov, 3))
-	throw "put failed";
+    S3Status sts = fs->s3->s3_put(key, iov, 3);
+    if (S3StatusOK != fs->s3->s3_put(key, iov, 3)){
+        printf("PUT FAILED\n");
+        throw "put failed";
+    }
     
     meta_log_tail = meta_log_head;
     data_log_tail = data_log_head;
+    printf("exit write everything out\n");
 }
 
 void fs_sync(void)
@@ -963,14 +972,19 @@ void fs_sync(void)
 
 void maybe_write(struct objfs *fs)
 {
+    printf("enter maybe write\n");
+    const std::lock_guard<std::mutex> lock(maybe_write_mutex);
     if ((meta_offset() > meta_log_len) ||
 	(data_offset() > data_log_len))
 	write_everything_out(fs);
+    printf("exit maybe write\n");
 }
 
 void make_record(const void *hdr, size_t hdrlen,
 		 const void *data, size_t datalen)
 {
+    //printf("make record\n");
+
     printout((void*)hdr, hdrlen);
     
     memcpy(meta_log_tail, hdr, hdrlen);
@@ -1088,6 +1102,7 @@ static int vec_2_inum(std::vector<std::string> pathvec)
 
 static int path_2_inum(const char *path)
 {
+    printf("path 2 inum\n");
     auto pathvec = split(path, '/');
     int inum = vec_2_inum(pathvec);
     return inum;
@@ -1120,12 +1135,22 @@ static void obj_2_stat(struct stat *sb, fs_obj *in)
 
 int fs_getattr(const char *path, struct stat *sb)
 {
+    printf("fs_getattr TRY LOCK\n");
+    const std::lock_guard<std::mutex> lock(global_mutex);
+    printf("fs_getattr LOCKED\n");
     int inum = path_2_inum(path);
-    if (inum < 0)
-	return inum;
+    if (inum < 0){
+        printf("fs_getattr TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_getattr UNLOCKED\n");
+        return inum;
+    }
 
     fs_obj *obj = inode_map[inum];
     obj_2_stat(sb, obj);
+    printf("fs_getattr TRY UNLOCK\n");
+    //global_mutex.unlock();
+    printf("fs_getattr UNLOCKED\n");
 
     return 0;
 }
@@ -1133,13 +1158,24 @@ int fs_getattr(const char *path, struct stat *sb)
 int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 		      off_t offset, struct fuse_file_info *fi)
 {
+    printf("fs_readdir TRY LOCK\n");
+    const std::lock_guard<std::mutex> lock(global_mutex);
+    printf("fs_readdir LOCKED\n");
     int inum = path_2_inum(path);
-    if (inum < 0)
-	return inum;
+    if (inum < 0){
+        printf("fs_readdir TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_readdir UNLOCKED\n");
+        return inum;
+    }
 
     fs_obj *obj = inode_map[inum];
-    if (obj->type != OBJ_DIR)
-	return -ENOTDIR;
+    if (obj->type != OBJ_DIR){
+        printf("fs_readdir TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_readdir UNLOCKED\n");
+        return -ENOTDIR;
+    }
     
     fs_directory *dir = (fs_directory*)obj;
     for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
@@ -1149,6 +1185,9 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 	obj_2_stat(&sb, o);
 	filler(ptr, const_cast<char*>(name.c_str()), &sb, 0);
     }
+    printf("fs_readdir TRY UNLOCK\n");
+    //global_mutex.unlock();
+    printf("fs_readdir UNLOCKED\n");
 
     return 0;
 }
@@ -1160,13 +1199,25 @@ int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    printf("fs_write TRY LOCK\n");
+    const std::lock_guard<std::mutex> lock(global_mutex);
+    printf("fs_write LOCKED\n");
+
     int inum = path_2_inum(path);
-    if (inum < 0)
-	return inum;
+    if (inum < 0){
+        printf("fs_write TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_write UNLOCKED\n");
+        return inum;
+    }
 
     fs_obj *obj = inode_map[inum];
-    if (obj->type != OBJ_FILE)
-	return -EISDIR;
+    if (obj->type != OBJ_FILE){
+        printf("fs_write TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_write UNLOCKED\n");
+        return -EISDIR;
+    }
 
     fs_file *f = (fs_file*)obj;
     off_t new_size = std::max((off_t)(offset+len), (off_t)(f->size));
@@ -1194,6 +1245,10 @@ int fs_write(const char *path, const char *buf, size_t len,
     f->extents.update(offset, e);
     dirty_inodes.insert(f);
     maybe_write(fs);
+
+    printf("fs_write TRY UNLOCK\n");
+    //global_mutex.unlock();
+    printf("fs_write UNLOCKED\n");
     
     return len;
 }
@@ -1238,16 +1293,32 @@ void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
 int fs_mkdir(const char *path, mode_t mode)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    printf("fs_mkdir TRY LOCK\n");
+    const std::lock_guard<std::mutex> lock(global_mutex);
+    printf("fs_mkdir LOCKED\n");
+
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
-    if (inum >= 0)
-	return -EEXIST;
-    if (parent_inum < 0)
-	return parent_inum;
+    if (inum >= 0){
+        printf("fs_mkdir TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_mkdir UNLOCKED\n");
+        return -EEXIST;
+    }
+    if (parent_inum < 0){
+        printf("fs_mkdir TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_mkdir UNLOCKED\n");
+        return parent_inum;
+    }
 
     fs_directory *parent = (fs_directory*)inode_map[parent_inum];
-    if (parent->type != OBJ_DIR)
-	return -ENOTDIR;
+    if (parent->type != OBJ_DIR){
+        printf("fs_mkdir TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_mkdir UNLOCKED\n");
+        return -ENOTDIR;
+    }
     
     inum = next_inode++;
     fs_directory *dir = new fs_directory;
@@ -1269,6 +1340,10 @@ int fs_mkdir(const char *path, mode_t mode)
     write_inode(dir);	// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
     maybe_write(fs);
+
+    printf("fs_mkdir TRY UNLOCK\n");
+    //global_mutex.unlock();
+    printf("fs_mkdir UNLOCKED\n");
 
     return 0;
 }
@@ -1292,6 +1367,7 @@ void do_log_delete(uint32_t parent_inum, uint32_t inum, std::string name)
 
 int fs_rmdir(const char *path)
 {
+    printf("fs_rmdir\n");
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
@@ -1393,7 +1469,7 @@ void do_log_trunc(uint32_t inum, off_t offset)
 int fs_truncate(const char *path, off_t len)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
-
+    printf("fs_truncate\n");
     int inum = path_2_inum(path);
     if (inum < 0)
 	return inum;
@@ -1418,6 +1494,7 @@ int fs_truncate(const char *path, off_t len)
  */
 int fs_unlink(const char *path)
 {
+    printf("fs_unlink\n");
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
@@ -1470,22 +1547,41 @@ void do_log_rename(int src_inum, int src_parent, int dst_parent,
 int fs_rename(const char *src_path, const char *dst_path)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
-
+    printf("fs_rename TRY LOCK\n");
+    const std::lock_guard<std::mutex> lock(global_mutex);
+    printf("fs_rename LOCKED\n");
     auto [src_inum, src_parent, src_leaf] = path_2_inum2(src_path);
-    if (src_inum < 0)
-	return src_inum;
+    if (src_inum < 0){
+        printf("fs_rename TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_rename UNLOCKED\n");
+        return src_inum;
+    }
+
     
     auto [dst_inum, dst_parent, dst_leaf] = path_2_inum2(dst_path);
-    if (dst_inum >= 0)
-	return -EEXIST;
-    if (dst_parent < 0)
-	return dst_parent;
+    if (dst_inum >= 0){
+        printf("fs_rename TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_rename UNLOCKED\n");
+        return -EEXIST;
+    }
+    if (dst_parent < 0){
+        printf("fs_rename TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_rename UNLOCKED\n");
+        return dst_parent;
+    }
 
     fs_directory *srcdir = (fs_directory*)inode_map[src_parent];
     fs_directory *dstdir = (fs_directory*)inode_map[src_parent];
 
-    if (dstdir->type != OBJ_DIR)
-	return -ENOTDIR;
+    if (dstdir->type != OBJ_DIR){
+        printf("fs_rename TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_rename UNLOCKED\n");
+        return -ENOTDIR;
+    }
 
     srcdir->dirents.erase(src_leaf);
     clock_gettime(CLOCK_REALTIME, &srcdir->mtime);
@@ -1497,12 +1593,16 @@ int fs_rename(const char *src_path, const char *dst_path)
     
     do_log_rename(src_inum, src_parent, dst_parent, src_leaf, dst_leaf);
     maybe_write(fs);
-    
+
+    printf("fs_rename TRY UNLOCK\n");
+    //global_mutex.unlock();
+    printf("fs_rename UNLOCKED\n");
     return 0;
 }
 
 int fs_chmod(const char *path, mode_t mode)
 {
+    printf("fs_chmod\n");
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
@@ -1521,6 +1621,7 @@ int fs_chmod(const char *path, mode_t mode)
 //
 int fs_utimens(const char *path, const struct timespec tv[2])
 {
+    printf("fs_utimens\n");
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
@@ -1543,19 +1644,30 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    struct fuse_file_info *fi)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    printf("fs_read TRY LOCK\n");
+    const std::lock_guard<std::mutex> lock(global_mutex);
+    printf("fs_read LOCKED\n");
 
     int inum = path_2_inum(path);
-    if (inum < 0)
-	return inum;
+    if (inum < 0){
+        printf("fs_read TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_read UNLOCKED\n");
+        return inum;
+    }
 
     fs_obj *obj = inode_map[inum];
-    if (obj->type != OBJ_FILE)
-	return -ENOTDIR;
+    if (obj->type != OBJ_FILE){
+        printf("fs_read TRY UNLOCK\n");
+        //global_mutex.unlock();
+        printf("fs_read UNLOCKED\n");
+        return -ENOTDIR;
+    }
     fs_file *f = (fs_file*)obj;
 
     size_t bytes = 0;
     for (auto it = f->extents.lookup(offset);
-	 len > 0 && it != f->extents.end(); it++) {
+	 len > 0 && len > bytes && it != f->extents.end(); it++) {
 	auto [base, e] = *it;
 	if (base > offset) {
 	    // yow, not supposed to have holes
@@ -1571,13 +1683,20 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    size_t _len = e.len - skip;
 	    if (_len > len)
 		_len = len;
-	    if (read_data(fs, buf, e.objnum, e.offset+skip, _len) < 0)
-		return -EIO;
+	    if (read_data(fs, buf, e.objnum, e.offset+skip, _len) < 0){
+            printf("fs_read TRY UNLOCK\n");
+            //global_mutex.unlock();
+            printf("fs_read UNLOCKED\n");
+            return -EIO;
+        }
 	    bytes += _len;
 	    offset += _len;
 	    buf += _len;
 	}
     }
+    printf("fs_read TRY UNLOCK\n");
+    //global_mutex.unlock();
+    printf("fs_read UNLOCKED\n");
     return bytes;
 }
 
@@ -1599,6 +1718,7 @@ void write_symlink(int inum, std::string target)
 
 int fs_symlink(const char *path, const char *contents)
 {
+    printf("fs_symlink\n");
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
@@ -1639,6 +1759,7 @@ int fs_symlink(const char *path, const char *contents)
 
 int fs_readlink(const char *path, char *buf, size_t len)
 {
+    printf("fs_readlink\n");
     int inum = path_2_inum(path);
     if (inum < 0)
 	return inum;
@@ -1666,6 +1787,7 @@ do_log_rename(
  */
 int fs_statfs(const char *path, struct statvfs *st)
 {
+    printf("fs_statfs\n");
     st->f_bsize = 4096;
     st->f_blocks = 0;
     st->f_bfree = 0;
@@ -1678,23 +1800,33 @@ int fs_statfs(const char *path, struct statvfs *st)
 int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    printf("fs_fsync TRY LOCK\n");
+    const std::lock_guard<std::mutex> lock(global_mutex);
+    printf("fs_fsync LOCKED\n");
     write_everything_out(fs);
+    printf("fs_fsync TRY UNLOCK\n");
+    //global_mutex.unlock();
+    printf("fs_fsync UNLOCKED\n");
+
     return 0;
 }
 
 void *fs_init(struct fuse_conn_info *conn)
 {
+    printf("fs_init\n");
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     // initialization - FIXME
     meta_log_len = 64 * 1024;
     meta_log_head = meta_log_tail = malloc(meta_log_len*2);
-    data_log_len = 8 * 1024 * 1024;
+    data_log_len = 2 * 8 * 1024 * 1024;
     data_log_head = data_log_tail = malloc(data_log_len);
 
     fs->s3 = new s3_target(fs->host, fs->bucket, fs->access, fs->secret, false);
 
     std::list<std::string> keys;
+    // TODO: error here
+    S3Status sts = fs->s3->s3_list(fs->prefix, keys);
     if (S3StatusOK != fs->s3->s3_list(fs->prefix, keys))
 	throw "bucket list failed";
 
@@ -1720,6 +1852,7 @@ void *fs_init(struct fuse_conn_info *conn)
 
 void fs_teardown(void)
 {
+    printf("fs_teardown\n");
     for (auto it = inode_map.begin(); it != inode_map.end();
 	 it = inode_map.erase(it)) ;
     this_index = 0;

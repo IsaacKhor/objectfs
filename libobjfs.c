@@ -13,6 +13,11 @@
 #include <signal.h>
 #include <malloc.h>
 
+#include <libs3.h>
+#include "s3wrap.h"
+#include "objfs.h"
+
+
 extern int fs_getattr(const char *path, struct stat *sb);
 extern int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
                       off_t offset, struct fuse_file_info *fi);
@@ -262,13 +267,18 @@ void py_sync(void)
 
 extern int fs_initialize(const char *prefix); 
 extern char *prefix;
+char prefix_arr[] = "                    ";
+char *prefix = prefix_arr;
 int py_init(const char *_prefix)
 {
+    //char *prefix = (char*) malloc(sizeof(char) * 100);
+    struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
+
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) { 
         //val = fs_initialize(prefix);
-	prefix = (char *)_prefix;
+        prefix = (char *)_prefix;
         fs_ops.init(NULL);
 
     }
@@ -276,3 +286,21 @@ int py_init(const char *_prefix)
     return val;
 }
 
+
+void set_objectfs_context(char *bucket, char *access_key, char *secret_key, char *host, size_t size) {
+    struct objfs *fs = malloc (sizeof (struct objfs));
+    fs->bucket = strdup(bucket);
+    fs->prefix = strdup(prefix);
+    fs->host = strdup(host);
+    fs->access = strdup(access_key);
+    fs->secret = strdup(secret_key);
+    fs->use_local = 0;
+    fs->chunk_size = size;
+    /*struct objfs fs = { .bucket = bucket, .prefix = prefix,
+        .host = host, .access = access_key,
+        .secret = secret_key, .use_local = 0,
+        .chunk_size = size};*/
+    //fs->s3 = s3_init(bucket, host, access_key, secret_key);
+    ctx.private_data = fs;
+    struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
+}

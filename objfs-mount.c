@@ -68,9 +68,9 @@ int main(int argc, char **argv)
 //    fuse_opt_insert_arg(&args, 1, "-oentry_timeout=1000,attr_timeout=1000");
 
     struct objfs fs = { .bucket = bucket, .prefix = prefix,
-        .host = getenv("S3_HOSTNAME"), .access = getenv("S3_ACCESS_KEY_ID"),
-        .secret = getenv("S3_SECRET_ACCESS_KEY"), .use_local = 0,
-        .chunk_size = size};
+        .host = "192.168.32.101:8080", .access = "FK31TLLZXJ0UHLG9PR0K", .secret = "KGuwIt2AnNay3tsYLWz2iV7STRCA7Kbr8MV5ex0I",
+        //.host = getenv("S3_HOSTNAME"), .access = getenv("S3_ACCESS_KEY_ID"), .secret = getenv("S3_SECRET_ACCESS_KEY"), 
+        .use_local = 0, .chunk_size = size};
 
     /* TODO: run using low-level FUSE interface
      */
