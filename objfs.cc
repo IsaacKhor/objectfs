@@ -54,6 +54,7 @@
 
 std::mutex global_mutex;
 std::mutex maybe_write_mutex;
+std::mutex write_everything_out_mutex;
 std::mutex create_node_mutex;
 std::mutex obj_2_stat_mutex;
 
@@ -930,6 +931,7 @@ void printout(void *hdr, int hdrlen)
 void write_everything_out(struct objfs *fs)
 {
     //printf("enter write everything out\n");
+    const std::lock_guard<std::mutex> lock(write_everything_out_mutex);
     for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
 	 it = dirty_inodes.erase(it)) {
 	write_inode(*it);
@@ -1479,6 +1481,7 @@ void do_log_trunc(uint32_t inum, off_t offset)
 
 int fs_truncate(const char *path, off_t len)
 {
+    const std::lock_guard<std::mutex> lock(global_mutex);
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     //printf("fs_truncate\n");
     int inum = path_2_inum(path);
