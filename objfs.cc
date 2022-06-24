@@ -567,13 +567,13 @@ class Profiler {
     std::thread::id tid;
     std::string func_name;
     std::string path;
-    int32_t size;
+    size_t size;
 
 public:
     Profiler();
     void SetFuncPath(std::string func, std::string input_path);
     ~Profiler();
-    void SetSize(int input_size);
+    void SetSize(size_t input_size);
 };
 
 Profiler::Profiler(){
@@ -593,6 +593,9 @@ Profiler::~Profiler(void) {
     std::string info = "Time: " + std::to_string(diff.count()) + ", PID: " + std::to_string(pid) +
         ", TID: " + ss.str() + ", Function: " + func_name + ", Path: " + path + ", Size: " + 
         std::to_string(size) + "\n";
+    if (func_name.compare("fs_read") == 0) {
+        printf("FS_READ SIZE: %zu\n", size);
+    }
     logger->log(info);
 }
 
@@ -601,7 +604,7 @@ void Profiler::SetFuncPath(std::string func, std::string input_path) {
     path = input_path;
 }
 
-void Profiler::SetSize(int input_size) {
+void Profiler::SetSize(size_t input_size) {
     size = input_size;
 }
 
@@ -1305,7 +1308,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     dirty_inodes.insert(f);
     maybe_write(fs);
 
-    profiler.SetSize(static_cast<int>(len));
+    profiler.SetSize(len);
     
     return len;
 }
@@ -1730,7 +1733,9 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    buf += _len;
 	}
     }
-    profiler.SetSize(static_cast<int>(bytes));
+    printf("%zu", bytes);
+
+    profiler.SetSize(bytes);
     return bytes;
 }
 
