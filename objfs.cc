@@ -60,6 +60,7 @@ std::mutex maybe_write_mutex;
 std::mutex write_everything_out_mutex;
 std::mutex create_node_mutex;
 std::mutex obj_2_stat_mutex;
+int seq = 0;
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -548,7 +549,7 @@ public:
 
 
 Logger::Logger(std::string path){
-    file_stream.open(path);
+    file_stream.open(path, std::fstream::out | std::fstream::trunc);
 }
 
 Logger::~Logger(void){
@@ -559,7 +560,7 @@ void Logger::log(std::string info) {
     file_stream << info;
 }
 
-Logger* logger = new Logger("/root/git/objectfs/log.txt");
+Logger* logger = new Logger("/mnt/ramdisk/log.txt");
 
 class Profiler {
     std::chrono::time_point<std::chrono::system_clock> timestamp;
@@ -568,35 +569,69 @@ class Profiler {
     std::string func_name;
     std::string path;
     size_t size;
+    int flag;
 
 public:
     Profiler();
+    Profiler(int input_flag);
     void SetFuncPath(std::string func, std::string input_path);
     ~Profiler();
     void SetSize(size_t input_size);
+    void StartTimer();
+    void StopTimer();
 };
 
-Profiler::Profiler(){
+void Profiler::StartTimer(){
     timestamp = std::chrono::system_clock::now();
+}
+
+void Profiler::StopTimer(){
+    auto end = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = end - timestamp;
+    std::stringstream ss;
+    ss << tid;
+    std::string info = "Time: " + std::to_string(diff.count()) + "; PID: " + std::to_string(pid) +
+            "; TID: " + ss.str() + "; Function: " + func_name + "; Path: " + path + "; Size: " + 
+            std::to_string(size) + "\n";
+    //logger->log(info);
+}
+
+Profiler::Profiler(){
     pid = getpid();
     tid = std::this_thread::get_id();
     func_name = "";
     path = "";
     size = -1;
+    timestamp = std::chrono::system_clock::now();
+    flag = 1;
+}
+
+Profiler::Profiler(int input_flag){
+    flag = input_flag;
+    pid = getpid();
+    tid = std::this_thread::get_id();
+    func_name = "";
+    path = "";
+    size = -1;
+    if (flag == 1){
+        timestamp = std::chrono::system_clock::now();
+    }
 }
 
 Profiler::~Profiler(void) {
-    auto end = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff = end - timestamp;
-    std::stringstream ss;
-    ss << tid;
-    std::string info = "Time: " + std::to_string(diff.count()) + ", PID: " + std::to_string(pid) +
-        ", TID: " + ss.str() + ", Function: " + func_name + ", Path: " + path + ", Size: " + 
-        std::to_string(size) + "\n";
-    if (func_name.compare("fs_read") == 0) {
-        printf("FS_READ SIZE: %zu\n", size);
+    if (flag == 1) {
+        auto end = std::chrono::system_clock::now();
+        std::chrono::duration<double> diff = end - timestamp;
+        std::stringstream ss;
+        ss << tid;
+        std::string info = "Time: " + std::to_string(diff.count()) + "; PID: " + std::to_string(pid) +
+            "; TID: " + ss.str() + "; Function: " + func_name + "; Path: " + path + "; Size: " + 
+            std::to_string(size) + "\n";
+        if (func_name.compare("fs_read") == 0) {
+            printf("FS_READ SIZE: %zu\n", size);
+        }
+        //logger->log(info);
     }
-    logger->log(info);
 }
 
 void Profiler::SetFuncPath(std::string func, std::string input_path) {
@@ -1005,8 +1040,9 @@ void printout(void *hdr, int hdrlen)
 
 void write_everything_out(struct objfs *fs)
 {
-    //printf("enter write everything out\n");
-    //const std::lock_guard<std::mutex> lock(write_everything_out_mutex);
+    auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("write_everything_out", "N/A");
     for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
 	 it = dirty_inodes.erase(it)) {
 	write_inode(*it);
@@ -1032,15 +1068,27 @@ void write_everything_out(struct objfs *fs)
     printf("writing %s:\n", key.c_str());
     printout((void*)&h, sizeof(h));
     printout((void*)meta_log_head, meta_offset());
+    //Profiler *profiler_2 = new Profiler(2);
+    //profiler_2->StartTimer();
+    auto start_2 = std::chrono::system_clock::now();
     S3Status sts = fs->s3->s3_put(key, iov, 3);
     if (S3StatusOK != fs->s3->s3_put(key, iov, 3)){
         printf("PUT FAILED\n");
         throw "put failed";
     }
-    
+    //profiler_2->SetFuncPath("s3_put", "N/A");
+    //profiler_2->StopTimer();
+    //delete profiler_2;
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start_2;
+    std::string diff_str = "S3_PUT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
     meta_log_tail = meta_log_head;
     data_log_tail = data_log_head;
-    //printf("exit write everything out\n");
+    now = std::chrono::system_clock::now();
+    diff = now - start;
+    diff_str = "WRITE_EVERYTHING_OUT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
 }
 
 void fs_sync(void)
@@ -1051,27 +1099,39 @@ void fs_sync(void)
 
 void maybe_write(struct objfs *fs)
 {
-    //printf("enter maybe write\n");
-    ////const std::lock_guard<std::mutex> lock(maybe_write_mutex);
+    auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("maybe_write", "N/A");
     if ((meta_offset() > meta_log_len) ||
 	(data_offset() > data_log_len))
 	write_everything_out(fs);
-    //printf("exit maybe write\n");
+
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "MAYBE_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
 }
 
 void make_record(const void *hdr, size_t hdrlen,
 		 const void *data, size_t datalen)
 {
-    //printf("make record\n");
+    auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("make_record", "N/A");
 
     printout((void*)hdr, hdrlen);
     
     memcpy(meta_log_tail, hdr, hdrlen);
     meta_log_tail = hdrlen + (char*)meta_log_tail;
     if (datalen > 0) {
-	memcpy(data_log_tail, data, datalen);
-	data_log_tail = datalen + (char*)data_log_tail;
+        memcpy(data_log_tail, data, datalen);
+        data_log_tail = datalen + (char*)data_log_tail;
     }
+
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "MAKE_RECORD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
 }
 
 std::map<int,int> data_offsets;
@@ -1267,8 +1327,10 @@ int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_write", std::string(path));
+    auto start = std::chrono::system_clock::now();
+    //logger->log("FS_WRITE\n");
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_write", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
@@ -1299,16 +1361,34 @@ int fs_write(const char *path, const char *buf, size_t len,
 		       .size = (int64_t)new_size,
 		       .len = (uint32_t)len };
 
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "BEFORE_MAKE_RECORD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+
     make_record((void*)hdr, hdr_bytes, buf, len);
+    auto start_3 = std::chrono::system_clock::now();
 
     // optimization - check if it extends the previous record?
     extent e = {.objnum = (uint32_t)this_index,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
     f->extents.update(offset, e);
     dirty_inodes.insert(f);
+
+    now = std::chrono::system_clock::now();
+    diff = now - start_3;
+    diff_str = "BEFORE_MAYBE_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
     maybe_write(fs);
 
-    profiler.SetSize(len);
+    //profiler.SetSize(len);
+
+    now = std::chrono::system_clock::now();
+    diff = now - start;
+    diff_str = "FS_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+
+    seq++;
     
     return len;
 }
@@ -1733,7 +1813,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    buf += _len;
 	}
     }
-    printf("%zu", bytes);
+    //printf("%zu", bytes);
 
     profiler.SetSize(bytes);
     return bytes;
