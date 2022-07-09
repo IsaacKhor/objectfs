@@ -11,27 +11,28 @@ def main():
     maybe_write = False
     write_everything_out = False
     fs_write = False
-    times = {"maybe_write": 0, "write_everything_out": 0, "s3_put": 0, "make_record": 0}
+    times = {}
     #times_2 = {"first": 0, "make_record": 0, "maybe_write": 0}
     for line in lines:
         pairs = line.strip().split(';')
         #print(line)
-        if "FS_WRITE" in line:
-            times["fs_write"] = float(pairs[0].split(":")[1].strip()) #- times["s3_put"] - times["write_everything_out"] - times["maybe_write"] - times["make_record"]
-            data.append(times)
-            times = {"maybe_write": 0, "write_everything_out": 0, "s3_put": 0, "make_record": 0}
+        if "PATH_2_INUM" in line:
+            times["path_2_inum"] = float(pairs[0].split(":")[1].strip()) #- times["s3_put"] - times["write_everything_out"] - times["maybe_write"] - times["make_record"]
             continue
         elif "BEFORE_MAKE_RECORD" in line:
-            times["before_make_record"] = float(pairs[0].split(":")[1].strip())
+            #print(times)
+            times["before_make_record"] = float(pairs[0].split(":")[1].strip()) - times["path_2_inum"]
             continue
         elif "BEFORE_MAYBE_WRITE" in line:
-            times["before_maybe_write"] = float(pairs[0].split(":")[1].strip())
+            times["before_maybe_write"] = float(pairs[0].split(":")[1].strip()) - times["before_make_record"] - times["make_record"] - times["path_2_inum"]
             continue
-        elif "MAKE_RECORD:" in line:
-            times["make_record"] = float(pairs[0].split(":")[1].strip())
+        elif "AFTER_MAKE_RECORD" in line:
+            times["make_record"] = float(pairs[0].split(":")[1].strip()) - times["before_make_record"] - times["path_2_inum"]
             continue
-        elif "MAYBE_WRITE:" in line:
-            times["maybe_write"] = float(pairs[0].split(":")[1].strip()) #- times["s3_put"] - times["write_everything_out"]
+        elif "AFTER_MAYBE_WRITE" in line:
+            times["maybe_write"] = float(pairs[0].split(":")[1].strip()) - times["before_make_record"] - times["make_record"] - times["before_maybe_write"] - times["path_2_inum"]
+            data.append(times)
+            times = {}
             continue
         elif "WRITE_EVERYTHING_OUT" in line:
             times["write_everything_out"] = float(pairs[0].split(":")[1].strip()) #- times["s3_put"]

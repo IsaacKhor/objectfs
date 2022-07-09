@@ -1040,7 +1040,7 @@ void printout(void *hdr, int hdrlen)
 
 void write_everything_out(struct objfs *fs)
 {
-    auto start = std::chrono::system_clock::now();
+    //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
     //profiler.SetFuncPath("write_everything_out", "N/A");
     for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
@@ -1070,7 +1070,7 @@ void write_everything_out(struct objfs *fs)
     printout((void*)meta_log_head, meta_offset());
     //Profiler *profiler_2 = new Profiler(2);
     //profiler_2->StartTimer();
-    auto start_2 = std::chrono::system_clock::now();
+    //auto start_2 = std::chrono::system_clock::now();
     S3Status sts = fs->s3->s3_put(key, iov, 3);
     if (S3StatusOK != fs->s3->s3_put(key, iov, 3)){
         printf("PUT FAILED\n");
@@ -1079,16 +1079,16 @@ void write_everything_out(struct objfs *fs)
     //profiler_2->SetFuncPath("s3_put", "N/A");
     //profiler_2->StopTimer();
     //delete profiler_2;
-    auto now = std::chrono::system_clock::now();
+    /*auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff = now - start_2;
     std::string diff_str = "S3_PUT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);
+    logger->log(diff_str);*/
     meta_log_tail = meta_log_head;
     data_log_tail = data_log_head;
-    now = std::chrono::system_clock::now();
+    /*now = std::chrono::system_clock::now();
     diff = now - start;
     diff_str = "WRITE_EVERYTHING_OUT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);
+    logger->log(diff_str);*/
 }
 
 void fs_sync(void)
@@ -1099,25 +1099,25 @@ void fs_sync(void)
 
 void maybe_write(struct objfs *fs)
 {
-    auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("maybe_write", "N/A");
+    //auto start = std::chrono::system_clock::now();
+    Profiler profiler;
+    profiler.SetFuncPath("maybe_write", "N/A");
     if ((meta_offset() > meta_log_len) ||
 	(data_offset() > data_log_len))
 	write_everything_out(fs);
 
-    auto now = std::chrono::system_clock::now();
+    /*auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff = now - start;
     std::string diff_str = "MAYBE_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);
+    logger->log(diff_str);*/
 }
 
 void make_record(const void *hdr, size_t hdrlen,
 		 const void *data, size_t datalen)
 {
-    auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("make_record", "N/A");
+    //auto start = std::chrono::system_clock::now();
+    Profiler profiler;
+    profiler.SetFuncPath("make_record", "N/A");
 
     printout((void*)hdr, hdrlen);
     
@@ -1128,10 +1128,10 @@ void make_record(const void *hdr, size_t hdrlen,
         data_log_tail = datalen + (char*)data_log_tail;
     }
 
-    auto now = std::chrono::system_clock::now();
+    /*auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff = now - start;
     std::string diff_str = "MAKE_RECORD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);
+    logger->log(diff_str);*/
 }
 
 std::map<int,int> data_offsets;
@@ -1334,6 +1334,8 @@ int fs_write(const char *path, const char *buf, size_t len,
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_5 = now - start;
     if (inum < 0){
         return inum;
     }
@@ -1361,13 +1363,18 @@ int fs_write(const char *path, const char *buf, size_t len,
 		       .size = (int64_t)new_size,
 		       .len = (uint32_t)len };
 
-    auto now = std::chrono::system_clock::now();
+    now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff = now - start;
-    std::string diff_str = "BEFORE_MAKE_RECORD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);
+    
+    //logger->log(diff_str);
 
     make_record((void*)hdr, hdr_bytes, buf, len);
-    auto start_3 = std::chrono::system_clock::now();
+
+    now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_2 = now - start;
+    
+    //logger->log(diff_str);
+    //auto start_3 = std::chrono::system_clock::now();
 
     // optimization - check if it extends the previous record?
     extent e = {.objnum = (uint32_t)this_index,
@@ -1376,17 +1383,30 @@ int fs_write(const char *path, const char *buf, size_t len,
     dirty_inodes.insert(f);
 
     now = std::chrono::system_clock::now();
-    diff = now - start_3;
-    diff_str = "BEFORE_MAYBE_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);
+    std::chrono::duration<double> diff_3 = now - start;
+    
+    //logger->log(diff_str);
     maybe_write(fs);
 
+    now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_4 = now - start;
+    
+    //logger->log(diff_str);
     //profiler.SetSize(len);
 
-    now = std::chrono::system_clock::now();
-    diff = now - start;
-    diff_str = "FS_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff_5 = now - start;
+    std::string diff_str = "BEFORE_MAKE_RECORD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    std::string diff_str_2 = "AFTER_MAKE_RECORD: "+std::to_string(diff_2.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    std::string diff_str_3 = "BEFORE_MAYBE_WRITE: "+std::to_string(diff_3.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    std::string diff_str_4 = "AFTER_MAYBE_WRITE: "+std::to_string(diff_4.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    std::string diff_str_5 = "PATH_2_INUM: "+std::to_string(diff_5.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_5);
     logger->log(diff_str);
+    logger->log(diff_str_2);
+    logger->log(diff_str_3);
+    logger->log(diff_str_4);
+    
 
     seq++;
     
