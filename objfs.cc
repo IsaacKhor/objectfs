@@ -587,7 +587,7 @@ void Profiler::StartTimer(){
 
 void Profiler::StopTimer(){
     auto end = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff = end - timestamp;
+    //std::chrono::duration<double> diff = end - timestamp;
     std::stringstream ss;
     ss << tid;
     std::string info = "Time: " + std::to_string(diff.count()) + "; PID: " + std::to_string(pid) +
@@ -621,7 +621,7 @@ Profiler::Profiler(int input_flag){
 Profiler::~Profiler(void) {
     if (flag == 1) {
         auto end = std::chrono::system_clock::now();
-        std::chrono::duration<double> diff = end - timestamp;
+        //std::chrono::duration<double> diff = end - timestamp;
         std::stringstream ss;
         ss << tid;
         std::string info = "Time: " + std::to_string(diff.count()) + "; PID: " + std::to_string(pid) +
@@ -1080,15 +1080,15 @@ void write_everything_out(struct objfs *fs)
     //profiler_2->StopTimer();
     //delete profiler_2;
     /*auto now = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff = now - start_2;
-    std::string diff_str = "S3_PUT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);*/
+    //std::chrono::duration<double> diff = now - start_2;
+    //std::string diff_str = "S3_PUT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);*/
     meta_log_tail = meta_log_head;
     data_log_tail = data_log_head;
     /*now = std::chrono::system_clock::now();
     diff = now - start;
     diff_str = "WRITE_EVERYTHING_OUT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);*/
+    //logger->log(diff_str);*/
 }
 
 void fs_sync(void)
@@ -1100,24 +1100,24 @@ void fs_sync(void)
 void maybe_write(struct objfs *fs)
 {
     //auto start = std::chrono::system_clock::now();
-    Profiler profiler;
-    profiler.SetFuncPath("maybe_write", "N/A");
+    //Profiler profiler;
+    //profiler.SetFuncPath("maybe_write", "N/A");
     if ((meta_offset() > meta_log_len) ||
 	(data_offset() > data_log_len))
 	write_everything_out(fs);
 
     /*auto now = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff = now - start;
-    std::string diff_str = "MAYBE_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);*/
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "MAYBE_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);*/
 }
 
 void make_record(const void *hdr, size_t hdrlen,
 		 const void *data, size_t datalen)
 {
     //auto start = std::chrono::system_clock::now();
-    Profiler profiler;
-    profiler.SetFuncPath("make_record", "N/A");
+    //Profiler profiler;
+    //profiler.SetFuncPath("make_record", "N/A");
 
     printout((void*)hdr, hdrlen);
     
@@ -1129,9 +1129,9 @@ void make_record(const void *hdr, size_t hdrlen,
     }
 
     /*auto now = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff = now - start;
-    std::string diff_str = "MAKE_RECORD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);*/
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "MAKE_RECORD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);*/
 }
 
 std::map<int,int> data_offsets;
@@ -1277,17 +1277,27 @@ static void obj_2_stat(struct stat *sb, fs_obj *in)
 
 int fs_getattr(const char *path, struct stat *sb)
 {
+    //auto start = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_getattr", std::string(path));
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_getattr", std::string(path));
     int inum = path_2_inum(path);
     if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+        //std::chrono::duration<double> diff = now - start;
+        //std::string diff_str = "FS_GETATTR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+        //logger->log(diff_str);
         return inum;
     }
 
     //printf("INUM: %d\n", inum);
     fs_obj *obj = inode_map[inum];
     obj_2_stat(sb, obj);
+
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_GETATTR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 
     return 0;
 }
@@ -1296,15 +1306,24 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 		      off_t offset, struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_readdir", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_readdir", std::string(path));
     int inum = path_2_inum(path);
     if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_READDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
         return inum;
     }
 
     fs_obj *obj = inode_map[inum];
     if (obj->type != OBJ_DIR){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_READDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
         return -ENOTDIR;
     }
     
@@ -1316,7 +1335,10 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 	obj_2_stat(&sb, o);
 	filler(ptr, const_cast<char*>(name.c_str()), &sb, 0);
     }
-
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_READDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return 0;
 }
 
@@ -1327,21 +1349,29 @@ int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    auto start = std::chrono::system_clock::now();
+    //auto start = std::chrono::system_clock::now();
     //logger->log("FS_WRITE\n");
     //Profiler profiler;
     //profiler.SetFuncPath("fs_write", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
-    auto now = std::chrono::system_clock::now();
+    //auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_5 = now - start;
     if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
         return inum;
     }
 
     fs_obj *obj = inode_map[inum];
     if (obj->type != OBJ_FILE){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
         return -EISDIR;
     }
 
@@ -1364,7 +1394,7 @@ int fs_write(const char *path, const char *buf, size_t len,
 		       .len = (uint32_t)len };
 
     now = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff = now - start;
+    //std::chrono::duration<double> diff = now - start;
     
     //logger->log(diff_str);
 
@@ -1394,17 +1424,15 @@ int fs_write(const char *path, const char *buf, size_t len,
     //logger->log(diff_str);
     //profiler.SetSize(len);
 
-    //now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff_5 = now - start;
-    std::string diff_str = "BEFORE_MAKE_RECORD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    std::string diff_str_2 = "AFTER_MAKE_RECORD: "+std::to_string(diff_2.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    std::string diff_str_3 = "BEFORE_MAYBE_WRITE: "+std::to_string(diff_3.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    std::string diff_str_4 = "AFTER_MAYBE_WRITE: "+std::to_string(diff_4.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    std::string diff_str_5 = "PATH_2_INUM: "+std::to_string(diff_5.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str_5);
-    logger->log(diff_str);
-    logger->log(diff_str_2);
-    logger->log(diff_str_3);
+    ////std::string diff_str = "BEFORE_MAKE_RECORD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //std::string diff_str_2 = "AFTER_MAKE_RECORD: "+std::to_string(diff_2.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //std::string diff_str_3 = "BEFORE_MAYBE_WRITE: "+std::to_string(diff_3.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //std::string diff_str_4 = "FS_WRITE: "+std::to_string(diff_4.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //std::string diff_str_5 = "PATH_2_INUM: "+std::to_string(diff_5.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str_5);
+    //logger->log(diff_str);
+    //logger->log(diff_str_2);
+    //logger->log(diff_str_3);
     logger->log(diff_str_4);
     
 
@@ -1453,21 +1481,34 @@ void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
 int fs_mkdir(const char *path, mode_t mode)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_mkdir", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_mkdir", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
     if (inum >= 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_MKDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
         return -EEXIST;
     }
     if (parent_inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_MKDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
         return parent_inum;
     }
 
     fs_directory *parent = (fs_directory*)inode_map[parent_inum];
     if (parent->type != OBJ_DIR){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_MKDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
         return -ENOTDIR;
     }
     
@@ -1491,6 +1532,10 @@ int fs_mkdir(const char *path, mode_t mode)
     write_inode(dir);	// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
     maybe_write(fs);
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_MKDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 
     return 0;
 }
@@ -1515,21 +1560,42 @@ void do_log_delete(uint32_t parent_inum, uint32_t inum, std::string name)
 int fs_rmdir(const char *path)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_rmdir", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_rmdir", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
-    if (inum < 0)
+    if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return -ENOENT;
-    if (parent_inum < 0)
+    }
+    if (parent_inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return parent_inum;
+    }
     
     fs_directory *dir = (fs_directory*)inode_map[inum];
-    if (dir->type != OBJ_DIR)
+    if (dir->type != OBJ_DIR){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return -ENOTDIR;
-    if (!dir->dirents.empty())
+    }
+    if (!dir->dirents.empty()){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return -ENOTEMPTY;
+    }
     
     fs_directory *parent = (fs_directory*)inode_map[parent_inum];
     inode_map.erase(inum);
@@ -1540,7 +1606,10 @@ int fs_rmdir(const char *path)
     dirty_inodes.insert(parent);
     do_log_delete(parent_inum, inum, leaf);
     maybe_write(fs);
-    
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return 0;
 }
 
@@ -1591,10 +1660,14 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_create", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_create", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
-
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_CREATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return create_node(fs, path, mode | S_IFREG, OBJ_FILE, 0);
 }
 
@@ -1624,18 +1697,34 @@ void do_log_trunc(uint32_t inum, off_t offset)
 int fs_truncate(const char *path, off_t len)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_truncate", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_truncate", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     int inum = path_2_inum(path);
-    if (inum < 0)
+    if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_TRUNCATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return inum;
+    }
 
     fs_file *f = (fs_file*)inode_map[inum];
-    if (f->type == OBJ_DIR)
+    if (f->type == OBJ_DIR){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_TRUNCATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return -EISDIR;
-    if (f->type != OBJ_FILE)
+    }
+    if (f->type != OBJ_FILE){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_TRUNCATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return -EINVAL;
+    }
     
     do_trunc(f, len);
     do_log_trunc(inum, len);
@@ -1643,7 +1732,10 @@ int fs_truncate(const char *path, off_t len)
     clock_gettime(CLOCK_REALTIME, &f->mtime);
     dirty_inodes.insert(f);
     maybe_write(fs);
-    
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_TRUNCATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return 0;
 }
 
@@ -1652,16 +1744,27 @@ int fs_truncate(const char *path, off_t len)
 int fs_unlink(const char *path)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_unlink", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_unlink", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
-    if (inum < 0)
+    if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_UNLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return inum;
+    }
     fs_obj *obj = inode_map[inum];
-    if (obj->type == OBJ_DIR)
+    if (obj->type == OBJ_DIR){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_UNLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return -EISDIR;
+    }
     
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
 
@@ -1676,7 +1779,10 @@ int fs_unlink(const char *path)
     }
     do_log_delete(parent_inum, inum, leaf);
     maybe_write(fs);
-    
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_UNLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return 0;
 }
 
@@ -1706,20 +1812,33 @@ void do_log_rename(int src_inum, int src_parent, int dst_parent,
 int fs_rename(const char *src_path, const char *dst_path)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_getattr", std::string(src_path) + ":" + std::string(dst_path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_getattr", std::string(src_path) + ":" + std::string(dst_path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     
     auto [src_inum, src_parent, src_leaf] = path_2_inum2(src_path);
     if (src_inum < 0){
+        //auto now = std::chrono::system_clock::now();
+        //std::chrono::duration<double> diff = now - start;
+        //std::string diff_str = "FS_RENAME: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+        //logger->log(diff_str);
         return src_inum;
     }
     
     auto [dst_inum, dst_parent, dst_leaf] = path_2_inum2(dst_path);
     if (dst_inum >= 0){
+        //auto now = std::chrono::system_clock::now();
+        //std::chrono::duration<double> diff = now - start;
+        //std::string diff_str = "FS_RENAME: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+        //logger->log(diff_str);
         return -EEXIST;
     }
     if (dst_parent < 0){
+        //auto now = std::chrono::system_clock::now();
+        //std::chrono::duration<double> diff = now - start;
+        //std::string diff_str = "FS_RENAME: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+        //logger->log(diff_str);
         return dst_parent;
     }
 
@@ -1727,6 +1846,10 @@ int fs_rename(const char *src_path, const char *dst_path)
     fs_directory *dstdir = (fs_directory*)inode_map[src_parent];
 
     if (dstdir->type != OBJ_DIR){
+        //auto now = std::chrono::system_clock::now();
+        //std::chrono::duration<double> diff = now - start;
+        //std::string diff_str = "FS_RENAME: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+        //logger->log(diff_str);
         return -ENOTDIR;
     }
 
@@ -1740,26 +1863,38 @@ int fs_rename(const char *src_path, const char *dst_path)
     
     do_log_rename(src_inum, src_parent, dst_parent, src_leaf, dst_leaf);
     maybe_write(fs);
-
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_RENAME: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return 0;
 }
 
 int fs_chmod(const char *path, mode_t mode)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_chmod", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_chmod", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
-    if (inum < 0)
+    if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+        //std::chrono::duration<double> diff = now - start;
+        //std::string diff_str = "FS_CHMOD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+        //logger->log(diff_str);
 	return inum;
+    }
 
     fs_obj *obj = inode_map[inum];
     obj->mode = mode | (S_IFMT & obj->mode);
     dirty_inodes.insert(obj);
     maybe_write(fs);
-    
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_CHMOD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return 0;
 }
 
@@ -1768,13 +1903,19 @@ int fs_chmod(const char *path, mode_t mode)
 int fs_utimens(const char *path, const struct timespec tv[2])
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_utimens", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_utimens", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
-    if (inum < 0)
+    if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_UTIMENS: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return inum;
+    }
 
     fs_obj *obj = inode_map[inum];
     if (tv == NULL || tv[1].tv_nsec == UTIME_NOW)
@@ -1783,6 +1924,10 @@ int fs_utimens(const char *path, const struct timespec tv[2])
 	obj->mtime = tv[1];
     dirty_inodes.insert(obj);
     maybe_write(fs);
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_UTIMENS: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     
     return 0;
 }
@@ -1792,17 +1937,26 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_read", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_read", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
     if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_READ: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
         return inum;
     }
 
     fs_obj *obj = inode_map[inum];
     if (obj->type != OBJ_FILE){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_READ: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
         return -ENOTDIR;
     }
     fs_file *f = (fs_file*)obj;
@@ -1826,6 +1980,10 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    if (_len > len)
 		_len = len;
 	    if (read_data(fs, buf, e.objnum, e.offset+skip, _len) < 0){
+            //auto now = std::chrono::system_clock::now();
+            //std::chrono::duration<double> diff = now - start;
+            //std::string diff_str = "FS_READ: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+            //logger->log(diff_str);
             return -EIO;
         }
 	    bytes += _len;
@@ -1835,7 +1993,11 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     }
     //printf("%zu", bytes);
 
-    profiler.SetSize(bytes);
+    //profiler.SetSize(bytes);
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_READ: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return bytes;
 }
 
@@ -1858,19 +2020,35 @@ void write_symlink(int inum, std::string target)
 int fs_symlink(const char *path, const char *contents)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_symlink", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_symlink", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
-    if (inum >= 0)
+    if (inum >= 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_SYMLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return -EEXIST;
-    if (parent_inum < 0)
+    }
+    if (parent_inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_SYMLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return parent_inum;
+    }
 
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
-    if (dir->type != OBJ_DIR)
+    if (dir->type != OBJ_DIR){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_SYMLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return -ENOTDIR;
+    }
     
     fs_link *l = new fs_link;
     l->type = OBJ_SYMLINK;
@@ -1894,25 +2072,43 @@ int fs_symlink(const char *path, const char *contents)
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
     maybe_write(fs);
-    
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_SYMLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return 0;
 }
 
 int fs_readlink(const char *path, char *buf, size_t len)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_getattr", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_getattr", std::string(path));
     int inum = path_2_inum(path);
-    if (inum < 0)
+    if (inum < 0){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_READLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return inum;
+    }
 
     fs_link *l = (fs_link*)inode_map[inum];
-    if (l->type != OBJ_SYMLINK)
+    if (l->type != OBJ_SYMLINK){
+        //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_READLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 	return -EINVAL;
+    }
 
     size_t val = std::min(len, l->target.length());
     memcpy(buf, l->target.c_str(), val);
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_READLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return val;
 }
 
@@ -1931,13 +2127,18 @@ do_log_rename(
 int fs_statfs(const char *path, struct statvfs *st)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_statfs", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_statfs", std::string(path));
     st->f_bsize = 4096;
     st->f_blocks = 0;
     st->f_bfree = 0;
     st->f_bavail = 0;
     st->f_namemax = 255;
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_STATFS: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 
     return 0;
 }
@@ -1945,11 +2146,16 @@ int fs_statfs(const char *path, struct statvfs *st)
 int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_fsync", std::string(path));
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_fsync", std::string(path));
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     
     write_everything_out(fs);
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_FSYNC: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
 
     return 0;
 }
@@ -1957,8 +2163,9 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 void *fs_init(struct fuse_conn_info *conn)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    Profiler profiler;
-    profiler.SetFuncPath("fs_truncate", "N/A");
+    //auto start = std::chrono::system_clock::now();
+    //Profiler profiler;
+    //profiler.SetFuncPath("fs_init", "N/A");
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     // initialization - FIXME
@@ -1992,6 +2199,10 @@ void *fs_init(struct fuse_conn_info *conn)
 	this_index = n+1;
     }
 
+    //auto now = std::chrono::system_clock::now();
+    //std::chrono::duration<double> diff = now - start;
+    //std::string diff_str = "FS_INIT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    //logger->log(diff_str);
     return (void*) fs;
 }
 
