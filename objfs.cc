@@ -1287,17 +1287,6 @@ int fs_getattr(const char *path, struct stat *sb)
 {
     //auto start = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_GETATTR_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //Profiler profiler;
     //profiler.SetFuncPath("fs_getattr", std::string(path));
@@ -1326,17 +1315,6 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 		      off_t offset, struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_READDIR_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
@@ -1381,7 +1359,7 @@ int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    seq++;
+   seq++;
     std::string read_str = "FS_WRITE; PATH: "+std::string(path)+"; SEQ: "+std::to_string(seq)  + "\n";
     logger->log(read_str);
 
@@ -1389,18 +1367,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
 
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_WRITE_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
-
+     
     int inum = path_2_inum(path);
     auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_5 = now - start;
@@ -1423,7 +1390,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     }
 
     fs_file *f = (fs_file*)obj;
-    logger->log("WRITE_EXTENTS_0: "+std::to_string(f->extents.size())+"\n");
+    
 
     off_t new_size = std::max((off_t)(offset+len), (off_t)(f->size));
     size_t obj_offset = data_offset();
@@ -1455,10 +1422,10 @@ int fs_write(const char *path, const char *buf, size_t len,
     // optimization - check if it extends the previous record?
     extent e = {.objnum = (uint32_t)this_index,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
-    logger->log("WRITE_EXTENTS_1: "+std::to_string(f->extents.size())+"\n");
+    
     f->extents.update(offset, e);
     dirty_inodes.insert(f);
-    logger->log("WRITE_EXTENTS_2: "+std::to_string(f->extents.size())+"\n");
+    
 
 
     now = std::chrono::system_clock::now();
@@ -1470,7 +1437,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_4 = now - start;
     start = std::chrono::system_clock::now();
-    logger->log("WRITE_EXTENTS_3: "+std::to_string(f->extents.size())+"\n");
+    
 
     //logger->log(diff_str);
     //profiler.SetSize(len);
@@ -1527,17 +1494,6 @@ void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
 int fs_mkdir(const char *path, mode_t mode)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_MKDIR_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
@@ -1618,17 +1574,6 @@ void do_log_delete(uint32_t parent_inum, uint32_t inum, std::string name)
 int fs_rmdir(const char *path)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_RMDIR_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
@@ -1746,17 +1691,6 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_CREATE_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     std::string read_str = "FS_CREATE; SEQ: "+std::to_string(seq) + "\n";
     logger->log(read_str);
@@ -1804,17 +1738,6 @@ void do_log_trunc(uint32_t inum, off_t offset)
 int fs_truncate(const char *path, off_t len)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_TRUNCATE_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     logger->log("FS_TRUNCATE; PATH: " + std::string(path) + "; SEQ: " + std::to_string(seq) + "\n");
     //auto start = std::chrono::system_clock::now();
@@ -1831,7 +1754,7 @@ int fs_truncate(const char *path, off_t len)
     }
 
     fs_file *f = (fs_file*)inode_map[inum];
-    logger->log("TRUNCATE_EXTENTS: " + std::to_string(f->extents.size()) + "\n");
+    
     if (f->type == OBJ_DIR){
         //auto now = std::chrono::system_clock::now();
     //std::chrono::duration<double> diff = now - start;
@@ -1865,17 +1788,6 @@ int fs_truncate(const char *path, off_t len)
 int fs_unlink(const char *path)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_UNLINK_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     std::string unlink_str = "FS_UNLINK; PATH: " + std::string(path) + "; SEQ: "+std::to_string(seq) + "\n";
     logger->log(unlink_str);
@@ -1970,17 +1882,6 @@ void do_log_rename(int src_inum, int src_parent, int dst_parent,
 int fs_rename(const char *src_path, const char *dst_path)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_RENAME_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //auto start = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
@@ -2041,17 +1942,6 @@ int fs_rename(const char *src_path, const char *dst_path)
 int fs_chmod(const char *path, mode_t mode)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_CHMOD_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
@@ -2083,17 +1973,6 @@ int fs_chmod(const char *path, mode_t mode)
 int fs_utimens(const char *path, const struct timespec tv[2])
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_UTIMENS_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
@@ -2129,17 +2008,6 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_READ_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     std::string read_str = "FS_READ; PATH: "+std::string(path)+"; SEQ: "+std::to_string(seq) + "\n";
     logger->log(read_str);
@@ -2169,7 +2037,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     fs_file *f = (fs_file*)obj;
 
     size_t bytes = 0;
-    logger->log("READ_EXTENTS: " + std::to_string(f->extents.size()) + "\n");
+    
     for (auto it = f->extents.lookup(offset);
 	 len > 0 && len > bytes && it != f->extents.end(); it++) {
 	    auto [base, e] = *it;
@@ -2234,17 +2102,6 @@ void write_symlink(int inum, std::string target)
 int fs_symlink(const char *path, const char *contents)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_SYMLINK_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
@@ -2308,17 +2165,6 @@ int fs_symlink(const char *path, const char *contents)
 int fs_readlink(const char *path, char *buf, size_t len)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_READLINK_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
@@ -2365,17 +2211,6 @@ do_log_rename(
 int fs_statfs(const char *path, struct statvfs *st)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_STATFS_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     auto start = std::chrono::system_clock::now();
     //Profiler profiler;
@@ -2396,17 +2231,6 @@ int fs_statfs(const char *path, struct statvfs *st)
 int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    int my_inum = path_2_inum("/sub1/kernel-0/include/linux/ext4_fs_extents.h");
-    if (my_inum >= 0) {
-        fs_obj *my_obj = inode_map[my_inum];
-        if (my_obj->type == OBJ_FILE){
-            fs_file *my_f = (fs_file*)my_obj;
-            logger->log("MY_FSYNC_EXTENTS: " + std::to_string(my_f->extents.size()) + "\n");
-            if (my_f->extents.size() == 0) {
-                printf("SIZE IS 0");
-            }
-        }
-    }
     seq++;
     //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
@@ -2425,7 +2249,7 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 void *fs_init(struct fuse_conn_info *conn)
 {
     const std::lock_guard<std::mutex> lock(global_mutex);
-    seq++;
+   seq++;
     //auto start = std::chrono::system_clock::now();
     //Profiler profiler;
     //profiler.SetFuncPath("fs_init", "N/A");
