@@ -47,6 +47,7 @@
 #include <sys/uio.h>
 #include <list>
 #include <libs3.h>
+//#include <unordered_map>
 #include "s3wrap.h"
 #include "objfs.h"
 
@@ -61,6 +62,8 @@ std::mutex write_everything_out_mutex;
 std::mutex create_node_mutex;
 std::mutex obj_2_stat_mutex;
 int seq = 0;
+
+//std::unordered_map<std::string, int> inum_cache;
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -618,7 +621,7 @@ Profiler::Profiler(int input_flag){
     }
 }
 
-Profiler::~Profiler(void) {
+/*Profiler::~Profiler(void) {
     if (flag == 1) {
         auto end = std::chrono::system_clock::now();
         std::chrono::duration<double> diff = end - timestamp;
@@ -632,7 +635,7 @@ Profiler::~Profiler(void) {
         }
         logger->log(info);
     }
-}
+}*/
 
 void Profiler::SetFuncPath(std::string func, std::string input_path) {
     func_name = func;
@@ -1148,9 +1151,18 @@ int do_read(struct objfs *fs, int index, void *buf, size_t len, size_t offset, b
     char key[256];
     sprintf(key, "%s.%08x%s", fs->prefix, index, ckpt ? ".ck" : "");
     struct iovec iov = {.iov_base = buf, .iov_len = (size_t)len};
-    logger->log("DO_READ;\n");
-    if (S3StatusOK != fs->s3->s3_get(key, offset, len, &iov, 1))
-	return -1;
+    auto start = std::chrono::system_clock::now();
+    if (S3StatusOK != fs->s3->s3_get(key, offset, len, &iov, 1)){
+        auto now = std::chrono::system_clock::now();
+        std::chrono::duration<double> diff = now - start;
+        std::string diff_str = "S3_GET: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+        logger->log(diff_str);
+        return -1;
+    }
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "S3_GET: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
     return len;
 }
 
@@ -1192,14 +1204,12 @@ int get_offset(struct objfs *fs, int index, bool ckpt)
 //
 int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
 {
-    logger->log("READ_DATA;\n");
     if (index == this_index) {
 	len = std::min(len, data_offset() - offset);
 	memcpy(buf, offset + (char*)data_log_head, len);
 	return len;
     }
     size_t n = get_offset(fs, index, false);
-    logger->log("AFTER_GET_OFFSET;\n");
     if (n < 0)
 	return n;
     return do_read(fs, index, buf, len, offset + n, false);
@@ -1249,9 +1259,17 @@ static int vec_2_inum(std::vector<std::string> pathvec)
 
 static int path_2_inum(const char *path)
 {
-    //printf("path 2 inum\n");
+    /*std::string path_str = std::string(path);
+    auto map_inum = inum_cache.find(path_str);
+    if (map_inum == inum_cache.end()) {
+        logger->log("MISS\n");
+    } else {
+        logger->log("HIT\n");
+        return map_inum->second;
+    }*/
     auto pathvec = split(path, '/');
     int inum = vec_2_inum(pathvec);
+    //inum_cache[path_str] = inum;
     return inum;
 }
 
@@ -1269,8 +1287,6 @@ std::tuple<int,int,std::string> path_2_inum2(const char* path)
 
 static void obj_2_stat(struct stat *sb, fs_obj *in)
 {
-    //printf("enter obj 2 stat\n");
-    ////const std::lock_guard<std::mutex> lock(obj_2_stat_mutex);
     memset(sb, 0, sizeof(*sb));
     sb->st_ino = in->inum;
     sb->st_mode = in->mode;
@@ -1280,16 +1296,18 @@ static void obj_2_stat(struct stat *sb, fs_obj *in)
     sb->st_size = in->size;
     sb->st_blocks = (in->size + 4095) / 4096;
     sb->st_atim = sb->st_mtim = sb->st_ctim = in->mtime;
-    //printf("exit obj 2 stat\n");
 }
 
 int fs_getattr(const char *path, struct stat *sb)
 {
-    //auto start = std::chrono::system_clock::now();
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
+
+    auto start = std::chrono::system_clock::now();
     seq++;
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_getattr", std::string(path));
+    
     int inum = path_2_inum(path);
     if (inum < 0){
         //auto now = std::chrono::system_clock::now();
@@ -1303,10 +1321,12 @@ int fs_getattr(const char *path, struct stat *sb)
     fs_obj *obj = inode_map[inum];
     obj_2_stat(sb, obj);
 
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_GETATTR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_GETATTR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_GETATTR_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
 
     return 0;
 }
@@ -1314,11 +1334,13 @@ int fs_getattr(const char *path, struct stat *sb)
 int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 		      off_t offset, struct fuse_file_info *fi)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_readdir", std::string(path));
+    auto start = std::chrono::system_clock::now();
+
     int inum = path_2_inum(path);
     if (inum < 0){
         //auto now = std::chrono::system_clock::now();
@@ -1345,10 +1367,12 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 	obj_2_stat(&sb, o);
 	filler(ptr, const_cast<char*>(name.c_str()), &sb, 0);
     }
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_READDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_READDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_READDIR_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return 0;
 }
 
@@ -1358,9 +1382,12 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
-   seq++;
-    std::string read_str = "FS_WRITE; PATH: "+std::string(path)+"; SEQ: "+std::to_string(seq)  + "\n";
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
+    seq++;
+    std::string read_str = "FS_WRITE; SEQ: "+std::to_string(seq)  + "\n";
     logger->log(read_str);
 
     auto start = std::chrono::system_clock::now();
@@ -1442,14 +1469,17 @@ int fs_write(const char *path, const char *buf, size_t len,
     //logger->log(diff_str);
     //profiler.SetSize(len);
 
-    /*std::string diff_str_2 = "MAKE_RECORD: "+std::to_string(diff_2.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    std::string diff_str_2 = "MAKE_RECORD: "+std::to_string(diff_2.count())+"; SEQ: "+std::to_string(seq)+"\n";
     std::string diff_str_3 = "WRITE_EXCLUSIVE: "+std::to_string(diff_3.count()+diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     std::string diff_str_4 = "MAYBE_WRITE: "+std::to_string(diff_4.count())+"; SEQ: "+std::to_string(seq)+"\n";
     std::string diff_str_5 = "PATH_2_INUM: "+std::to_string(diff_5.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str_5);
     logger->log(diff_str_2);
     logger->log(diff_str_4);
-    logger->log(diff_str_3);*/
+    logger->log(diff_str_3);
+
+    std::string diff_str_lock = "FS_WRITE_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     
     return len;
 }
@@ -1493,11 +1523,13 @@ void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
 
 int fs_mkdir(const char *path, mode_t mode)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_mkdir", std::string(path));
+    auto start = std::chrono::system_clock::now();
+
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
@@ -1546,10 +1578,12 @@ int fs_mkdir(const char *path, mode_t mode)
     write_inode(dir);	// can't rely on dirty_inodes
     write_dirent(parent_inum, leaf, inum);
     maybe_write(fs);
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_MKDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_MKDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_MKDIR_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
 
     return 0;
 }
@@ -1573,11 +1607,13 @@ void do_log_delete(uint32_t parent_inum, uint32_t inum, std::string name)
 
 int fs_rmdir(const char *path)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_rmdir", std::string(path));
+    auto start = std::chrono::system_clock::now();
+
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
@@ -1621,10 +1657,12 @@ int fs_rmdir(const char *path)
     dirty_inodes.insert(parent);
     do_log_delete(parent_inum, inum, leaf);
     maybe_write(fs);
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_RMDIR_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return 0;
 }
 
@@ -1690,7 +1728,10 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
 // only called for regular files
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
     std::string read_str = "FS_CREATE; SEQ: "+std::to_string(seq) + "\n";
     logger->log(read_str);
@@ -1700,6 +1741,8 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     std::chrono::duration<double> diff = now - start;
     std::string diff_str = "FS_CREATE_EXCLUSIVE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str);
+    std::string diff_str_lock = "FS_CREATE_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return create_node(fs, path, mode | S_IFREG, OBJ_FILE, 0);
 }
 
@@ -1737,12 +1780,14 @@ void do_log_trunc(uint32_t inum, off_t offset)
 
 int fs_truncate(const char *path, off_t len)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
     logger->log("FS_TRUNCATE; PATH: " + std::string(path) + "; SEQ: " + std::to_string(seq) + "\n");
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_truncate", std::string(path));
+    auto start = std::chrono::system_clock::now();
+
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     int inum = path_2_inum(path);
     if (inum < 0){
@@ -1776,10 +1821,12 @@ int fs_truncate(const char *path, off_t len)
     clock_gettime(CLOCK_REALTIME, &f->mtime);
     dirty_inodes.insert(f);
     maybe_write(fs);
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_TRUNCATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_TRUNCATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_TRUNCATE_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return 0;
 }
 
@@ -1787,9 +1834,12 @@ int fs_truncate(const char *path, off_t len)
  */
 int fs_unlink(const char *path)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    std::string unlink_str = "FS_UNLINK; PATH: " + std::string(path) + "; SEQ: "+std::to_string(seq) + "\n";
+    std::string unlink_str = "FS_UNLINK; SEQ: "+std::to_string(seq) + "\n";
     logger->log(unlink_str);
     auto start = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
@@ -1853,6 +1903,8 @@ int fs_unlink(const char *path)
     logger->log(diff_str_2);
     std::string diff_str = "MAYBE_WRITE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str);
+    std::string diff_str_lock = "FS_UNLINK_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return 0;
 }
 
@@ -1881,9 +1933,12 @@ void do_log_rename(int src_inum, int src_parent, int dst_parent,
 
 int fs_rename(const char *src_path, const char *dst_path)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    //auto start = std::chrono::system_clock::now();
+    auto start = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     
     auto [src_inum, src_parent, src_leaf] = path_2_inum2(src_path);
@@ -1932,20 +1987,23 @@ int fs_rename(const char *src_path, const char *dst_path)
     
     do_log_rename(src_inum, src_parent, dst_parent, src_leaf, dst_leaf);
     maybe_write(fs);
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_RENAME: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_RENAME: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_RENAME_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return 0;
 }
 
 int fs_chmod(const char *path, mode_t mode)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_chmod", std::string(path));
+    auto start = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
@@ -1961,10 +2019,12 @@ int fs_chmod(const char *path, mode_t mode)
     obj->mode = mode | (S_IFMT & obj->mode);
     dirty_inodes.insert(obj);
     maybe_write(fs);
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_CHMOD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_CHMOD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_CHMOD_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return 0;
 }
 
@@ -1972,11 +2032,13 @@ int fs_chmod(const char *path, mode_t mode)
 //
 int fs_utimens(const char *path, const struct timespec tv[2])
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_utimens", std::string(path));
+    auto start = std::chrono::system_clock::now();
+
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum = path_2_inum(path);
@@ -1995,10 +2057,12 @@ int fs_utimens(const char *path, const struct timespec tv[2])
 	obj->mtime = tv[1];
     dirty_inodes.insert(obj);
     maybe_write(fs);
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_UTIMENS: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_UTIMENS: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_UTIMENS_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     
     return 0;
 }
@@ -2007,9 +2071,12 @@ int fs_utimens(const char *path, const struct timespec tv[2])
 int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    struct fuse_file_info *fi)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    std::string read_str = "FS_READ; PATH: "+std::string(path)+"; SEQ: "+std::to_string(seq) + "\n";
+    std::string read_str = "FS_READ; SEQ: "+std::to_string(seq) + "\n";
     logger->log(read_str);
     auto start = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
@@ -2041,7 +2108,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     for (auto it = f->extents.lookup(offset);
 	 len > 0 && len > bytes && it != f->extents.end(); it++) {
 	    auto [base, e] = *it;
-        logger->log("PATH: " + std::string(path) + "; OFFSET: " + std::to_string(offset) + "; BASE: " + std::to_string(base) + "\n" );
+        //logger->log("PATH: " + std::string(path) + "; OFFSET: " + std::to_string(offset) + "; BASE: " + std::to_string(base) + "\n" );
         if (base > offset) {
             // yow, not supposed to have holes
             size_t skip = base-offset;
@@ -2052,7 +2119,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
             buf += skip;
         }
         else {
-            logger->log("ELSE;\n");
+            //logger->log("ELSE;\n");
             size_t skip = offset - base;
             size_t _len = e.len - skip;
             if (_len > len)
@@ -2080,6 +2147,8 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     logger->log(diff_str_2);
     std::string diff_str = "FS_READ_EXCLUSIVE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+ "; READ_SIZE: " + std::to_string(bytes) + "\n";
     logger->log(diff_str);
+    std::string diff_str_lock = "FS_READ_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return bytes;
 }
 
@@ -2101,11 +2170,13 @@ void write_symlink(int inum, std::string target)
 
 int fs_symlink(const char *path, const char *contents)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_symlink", std::string(path));
+    auto start = std::chrono::system_clock::now();
+
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
@@ -2155,20 +2226,23 @@ int fs_symlink(const char *path, const char *contents)
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
     dirty_inodes.insert(dir);
     maybe_write(fs);
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_SYMLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_SYMLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_SYMLINK_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return 0;
 }
 
 int fs_readlink(const char *path, char *buf, size_t len)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_getattr", std::string(path));
+    auto start = std::chrono::system_clock::now();
     int inum = path_2_inum(path);
     if (inum < 0){
         //auto now = std::chrono::system_clock::now();
@@ -2189,10 +2263,12 @@ int fs_readlink(const char *path, char *buf, size_t len)
 
     size_t val = std::min(len, l->target.length());
     memcpy(buf, l->target.c_str(), val);
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_READLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_READLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_READLINK_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return val;
 }
 
@@ -2210,11 +2286,13 @@ do_log_rename(
  */
 int fs_statfs(const char *path, struct statvfs *st)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
     auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_statfs", std::string(path));
+
     st->f_bsize = 4096;
     st->f_blocks = 0;
     st->f_bfree = 0;
@@ -2224,35 +2302,43 @@ int fs_statfs(const char *path, struct statvfs *st)
     std::chrono::duration<double> diff = now - start;
     std::string diff_str = "FS_STATFS: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str);
+    std::string diff_str_lock = "FS_STATFS_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
 
     return 0;
 }
 
 int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_fsync", std::string(path));
+    auto start = std::chrono::system_clock::now();
+
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     
     write_everything_out(fs);
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_FSYNC: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_FSYNC: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_FSYNC_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
 
     return 0;
 }
 
 void *fs_init(struct fuse_conn_info *conn)
 {
+    auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
-   seq++;
-    //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("fs_init", "N/A");
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
+    seq++;
+    auto start = std::chrono::system_clock::now();
+
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     // initialization - FIXME
@@ -2286,10 +2372,12 @@ void *fs_init(struct fuse_conn_info *conn)
 	this_index = n+1;
     }
 
-    //auto now = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = now - start;
-    //std::string diff_str = "FS_INIT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    //logger->log(diff_str);
+    auto now = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    std::string diff_str = "FS_INIT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str);
+    std::string diff_str_lock = "FS_INIT_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(diff_str_lock);
     return (void*) fs;
 }
 
