@@ -1387,15 +1387,20 @@ int fs_write(const char *path, const char *buf, size_t len,
     auto end_lock = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    std::string read_str = "FS_WRITE; SEQ: "+std::to_string(seq)  + "\n";
+    std::string read_str = "FS_WRITE; SEQ: "+std::to_string(seq) + "; PATH: "+std::string(path) + "\n";
     logger->log(read_str);
 
     auto start = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
-
-     
-    int inum = path_2_inum(path);
+    int inum;
+    //if (fi->fh != 0) {
+    //    logger->log("WRITE_HIT\n");
+    //    inum = fi->fh;
+    //} else {
+    //    logger->log("WRITE_MISS\n");
+        inum = path_2_inum(path);
+    //}
     auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_5 = now - start;
     start = std::chrono::system_clock::now();
@@ -1722,7 +1727,7 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
     std::string diff_str_2 = "CREATE_NODE_EXCLUSIVE: "+std::to_string(diff_2.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str_2);
     
-    return 0;
+    return inum;
 }
 
 // only called for regular files
@@ -1733,7 +1738,7 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     auto end_lock = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    std::string read_str = "FS_CREATE; SEQ: "+std::to_string(seq) + "\n";
+    std::string read_str = "FS_CREATE; SEQ: "+std::to_string(seq) + "; PATH: "+std::string(path) + "\n";
     logger->log(read_str);
     auto start = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
@@ -1743,7 +1748,15 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     logger->log(diff_str);
     std::string diff_str_lock = "FS_CREATE_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str_lock);
-    return create_node(fs, path, mode | S_IFREG, OBJ_FILE, 0);
+    int inum = create_node(fs, path, mode | S_IFREG, OBJ_FILE, 0);
+
+    if (inum <= 0) {
+        return inum;
+    }
+
+    fi->fh = inum;
+
+    return 0;
 }
 
 // for device files, FIFOs, etc.
@@ -1751,7 +1764,12 @@ int fs_mknod(const char *path, mode_t mode, dev_t dev)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
-    return create_node(fs, path, mode, OBJ_OTHER, dev);
+    int inum = create_node(fs, path, mode, OBJ_OTHER, dev);
+    if (inum < 0) {
+        return inum;
+    }
+
+    return 0;
 }
 
 void do_log_trunc(uint32_t inum, off_t offset)
@@ -2068,20 +2086,68 @@ int fs_utimens(const char *path, const struct timespec tv[2])
 }
 
 
+int fs_open(const char *path, struct fuse_file_info *fi)
+{
+    auto start_lock = std::chrono::system_clock::now();
+    const std::lock_guard<std::mutex> lock(global_mutex);
+    auto end_lock = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff_lock = end_lock - start_lock;
+
+    auto start = std::chrono::system_clock::now();
+    int inum = path_2_inum(path);
+    //std::string debug_str = "FS_OPEN_INUM: "+ std::to_string(inum) +"; SEQ: "+std::to_string(seq) + "\n";
+    //logger->log(debug_str);
+    if (inum <= 0){
+        std::string open_str = "FS_OPEN_ERROR; SEQ: "+std::to_string(seq) +"\n";
+        logger->log(open_str);
+        return inum;
+    }
+    fs_obj *obj = inode_map[inum];
+    if (obj->type != OBJ_FILE){
+        std::string open_str_2 = "FS_OPEN_2_ERROR; SEQ: "+std::to_string(seq)+"\n";
+        logger->log(open_str_2);
+        return -ENOTDIR;
+    }
+
+    auto end = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = end - start;
+    fi->fh = inum;
+    
+    std::string open_str = "FS_OPEN; SEQ: "+std::to_string(seq) + "; PATH: "+std::string(path) + "\n";
+    logger->log(open_str);
+    std::string open_str_lock = "FS_OPEN_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(open_str_lock);
+    open_str = "PATH_2_INUM: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
+    logger->log(open_str);
+
+    return 0;
+}
+
 int fs_read(const char *path, char *buf, size_t len, off_t offset,
 	    struct fuse_file_info *fi)
 {
     auto start_lock = std::chrono::system_clock::now();
     const std::lock_guard<std::mutex> lock(global_mutex);
     auto end_lock = std::chrono::system_clock::now();
+    //printf("FS_READ LOCK RELEASED\n");
+    //printf(path);
+    //printf("\n");
     std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    std::string read_str = "FS_READ; SEQ: "+std::to_string(seq) + "\n";
+    std::string read_str = "FS_READ; SEQ: "+std::to_string(seq) + "; PATH: "+std::string(path) + "\n";
     logger->log(read_str);
     auto start = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
-    int inum = path_2_inum(path);
+    int inum;
+    //if (fi->fh != 0) {
+    //    logger->log("READ_HIT\n");
+    //    inum = fi->fh;
+    //} else {
+    //    logger->log("READ_MISS\n");
+        inum = path_2_inum(path);
+    //}
+
     auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_2 = now - start;
     start = std::chrono::system_clock::now();
@@ -2451,6 +2517,7 @@ struct fuse_operations fs_ops = {
     .rename = fs_rename,
     .chmod = fs_chmod,
     .truncate = fs_truncate,
+    .open = fs_open,
     .read = fs_read,
     .write = fs_write,
     .statfs = fs_statfs,
