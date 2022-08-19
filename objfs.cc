@@ -92,113 +92,113 @@ public:
     // - lowest extent with base > @offset
     // - end()
     internal_map::iterator lookup(int64_t offset) {
-	auto it = the_map.lower_bound(offset);
-	if (it == the_map.end())
-	    return it;
-	auto& [base, e] = *it;
-	if (base > offset && it != the_map.begin()) {
-	    it--;
-	    auto& [base0, e0] = *it;
-	    if (offset < base0 + e0.len)
-		return it;
-	    it++;
-	}
-	return it;
+        auto it = the_map.lower_bound(offset);
+        if (it == the_map.end())
+            return it;
+        auto& [base, e] = *it;
+        if (base > offset && it != the_map.begin()) {
+            it--;
+            auto& [base0, e0] = *it;
+            if (offset < base0 + e0.len)
+                return it;
+            it++;
+        }
+        return it;
     }
 
     void update(int64_t offset, extent e) {
-	// two special cases
-	// (1) map is empty - just add and we're done
-	//
-	if (the_map.empty()) {
-	    the_map[offset] = e;
-	    return;
-	}
+        // two special cases
+        // (1) map is empty - just add and we're done
+        //
+        if (the_map.empty()) {
+            the_map[offset] = e;
+            return;
+        }
 
-	// extending the last extent
-	//
-	auto [key, val] = *(--the_map.end());
-	if (offset == key + val.len && e.offset == val.offset + val.len) {
-	    val.len += e.len;
-	    the_map[key] = val;
-	    return;
-	}
-	
-	auto it = the_map.lower_bound(offset);
+        // extending the last extent
+        //
+        auto [key, val] = *(--the_map.end());
+        if (offset == key + val.len && e.offset == val.offset + val.len) {
+            val.len += e.len;
+            the_map[key] = val;
+            return;
+        }
+        
+        auto it = the_map.lower_bound(offset);
 
-	// we're at the the end of the list
-	if (it == end()) {
-	    the_map[offset] = e;
-	    return;
-	}
+        // we're at the the end of the list
+        if (it == end()) {
+            the_map[offset] = e;
+            return;
+        }
 
-	// erase any extents fully overlapped
-	//       -----  --- 
-	//   +++++++++++++++++
-	// = +++++++++++++++++
-	//
-	while (it != the_map.end()) {
-	    auto [key, val] = *it;
-	    if (key >= offset && key+val.len <= offset + e.len) {
-		it++;
-		the_map.erase(key);
-	    }
-	    else
-		break;
-	}
+        // erase any extents fully overlapped
+        //       -----  --- 
+        //   +++++++++++++++++
+        // = +++++++++++++++++
+        //
+        while (it != the_map.end()) {
+            auto [key, val] = *it;
+            if (key >= offset && key+val.len <= offset + e.len) {
+                it++;
+                the_map.erase(key);
+            }
+            else
+                break;
+        }
 
-	if (it != the_map.end()) {
-	    // update right-hand overlap
-	    //        ---------
-	    //   ++++++++++
-	    // = ++++++++++----
-	    //
-	    auto [key, val] = *it;
-	
-	    if (key < offset + e.len) {
-		auto new_key = offset + e.len;
-		val.len -= (new_key - key);
-		val.offset += (new_key - key);
-		the_map.erase(key);
-		the_map[new_key] = val;
-	    }
-	}
+        if (it != the_map.end()) {
+            // update right-hand overlap
+            //        ---------
+            //   ++++++++++
+            // = ++++++++++----
+            //
+            auto [key, val] = *it;
+        
+            if (key < offset + e.len) {
+                auto new_key = offset + e.len;
+                val.len -= (new_key - key);
+                val.offset += (new_key - key);
+                the_map.erase(key);
+                the_map[new_key] = val;
+            }
+        }
 
-	it = the_map.lower_bound(offset);	
-	if (it != the_map.begin()) {
-	    it--;
-	    auto [key, val] = *it;
+        it = the_map.lower_bound(offset);	
+        if (it != the_map.begin()) {
+            it--;
+            auto [key, val] = *it;
 
-	    // we bisect an extent
-	    //   ------------------
-	    //           +++++
-	    // = --------+++++-----
-	    if (key < offset && key + val.len > offset + e.len) {
-		auto new_key = offset + e.len;
-		auto new_len = val.len - (new_key-key);
-		val.len = offset - key;
-		the_map[key] = val;
-		val.offset += (new_key-key);
-		val.len = new_len;
-		the_map[new_key] = val;
-	    }
+            // we bisect an extent
+            //   ------------------
+            //           +++++
+            // = --------+++++-----
+            if (key < offset && key + val.len > offset + e.len) {
+                auto new_key = offset + e.len;
+                auto new_len = val.len - (new_key-key);
+                val.len = offset - key;
+                the_map[key] = val;
+                val.offset += (new_key-key);
+                val.len = new_len;
+                the_map[new_key] = val;
+            }
 
-	    // left-hand overlap
-	    //   ---------
-	    //       ++++++++++
-	    // = ----++++++++++
-	    //
-	    else if (key < offset && key + val.len > offset) {
-		val.len = offset - key;
-		the_map[key] = val;
-	    }
-	}
+            // left-hand overlap
+            //   ---------
+            //       ++++++++++
+            // = ----++++++++++
+            //
+            else if (key < offset && key + val.len > offset) {
+                val.len = offset - key;
+                the_map[key] = val;
+            }
+        }
 
-	the_map[offset] = e;
+        the_map[offset] = e;
     }
 
     void erase(int64_t offset) {
-	the_map.erase(offset);
+        the_map.erase(offset);
     }
 };
 
@@ -292,11 +292,11 @@ fs_file::fs_file(void *ptr, size_t len)
     extent_xp *ex = (extent_xp*)(sizeof(fs_obj) + (char*)ptr);
 
     while (len > 0) {
-	extent e = {.objnum = ex->objnum,
-		    .offset = ex->obj_offset, .len = ex->len};
-	extents.update(ex->file_offset, e);
-	ex++;
-	len -= sizeof(*ex);
+        extent e = {.objnum = ex->objnum,
+                .offset = ex->obj_offset, .len = ex->len};
+        extents.update(ex->file_offset, e);
+        ex++;
+        len -= sizeof(*ex);
     }
     assert(len == 0);
 }
@@ -695,38 +695,38 @@ static int read_log_inode(log_inode *in)
 {
     auto it = inode_map.find(in->inum);
     if (it != inode_map.end()) {
-	auto obj = inode_map[in->inum];
-	update_inode(obj, in);
+        auto obj = inode_map[in->inum];
+        update_inode(obj, in);
     }
     else {
-	if (S_ISDIR(in->mode)) {
-	    fs_directory *d = new fs_directory;
-	    d->type = OBJ_DIR;
-	    d->size = 0;
-	    inode_map[in->inum] = d;
-	    update_inode(d, in);
-	}
-	else if (S_ISREG(in->mode)) {
-	    fs_file *f = new fs_file;
-	    f->type = OBJ_FILE;
-	    f->size = 0;
-	    update_inode(f, in);
-	    inode_map[in->inum] = f;
-	}
-	else if (S_ISLNK(in->mode)) {
-	    fs_link *s = new fs_link;
-	    s->type = OBJ_SYMLINK;
-	    update_inode(s, in);
-	    s->size = 0;
-	    inode_map[in->inum] = s;
-	}
-	else {
-	    fs_obj *o = new fs_obj;
-	    o->type = OBJ_OTHER;
-	    update_inode(o, in);
-	    o->size = 0;
-	    inode_map[in->inum] = o;
-	}
+        if (S_ISDIR(in->mode)) {
+            fs_directory *d = new fs_directory;
+            d->type = OBJ_DIR;
+            d->size = 0;
+            inode_map[in->inum] = d;
+            update_inode(d, in);
+        }
+        else if (S_ISREG(in->mode)) {
+            fs_file *f = new fs_file;
+            f->type = OBJ_FILE;
+            f->size = 0;
+            update_inode(f, in);
+            inode_map[in->inum] = f;
+        }
+        else if (S_ISLNK(in->mode)) {
+            fs_link *s = new fs_link;
+            s->type = OBJ_SYMLINK;
+            update_inode(s, in);
+            s->size = 0;
+            inode_map[in->inum] = s;
+        }
+        else {
+            fs_obj *o = new fs_obj;
+            o->type = OBJ_OTHER;
+            update_inode(o, in);
+            o->size = 0;
+            inode_map[in->inum] = o;
+        }
     }
     return 0;
 }
@@ -758,11 +758,11 @@ int read_log_trunc(log_trunc *tr)
 {
     auto it = inode_map.find(tr->inum);
     if (it == inode_map.end())
-	return -1;
+	    return -1;
 
     fs_file *f = (fs_file*)(inode_map[tr->inum]);
     if (f->size < tr->new_size)
-	return -1;
+	    return -1;
 
     do_trunc(f, tr->new_size);
     return 0;
@@ -773,9 +773,9 @@ int read_log_trunc(log_trunc *tr)
 static int read_log_delete(log_delete *rm)
 {
     if (inode_map.find(rm->parent) == inode_map.end())
-	return -1;
+	    return -1;
     if (inode_map.find(rm->inum) == inode_map.end())
-	return -1;
+	    return -1;
 
     fs_directory *parent = (fs_directory*)(inode_map[rm->parent]);
     auto name = std::string(rm->name, rm->namelen);
@@ -792,7 +792,7 @@ static int read_log_delete(log_delete *rm)
 static int read_log_symlink(log_symlink *sl)
 {
     if (inode_map.find(sl->inum) == inode_map.end())
-	return -1;
+	    return -1;
 
     fs_link *s = (fs_link *)(inode_map[sl->inum]);
     s->target = std::string(sl->target, sl->len);
@@ -805,9 +805,9 @@ static int read_log_symlink(log_symlink *sl)
 static int read_log_rename(log_rename *mv)
 {
     if (inode_map.find(mv->parent1) == inode_map.end())
-	return -1;
+	    return -1;
     if (inode_map.find(mv->parent2) == inode_map.end())
-	return -1;
+	    return -1;
     
     fs_directory *parent1 = (fs_directory*)(inode_map[mv->parent1]);
     fs_directory *parent2 = (fs_directory*)(inode_map[mv->parent2]);
@@ -816,11 +816,11 @@ static int read_log_rename(log_rename *mv)
     auto name2 = std::string(&mv->name[mv->name1_len], mv->name2_len);
 
     if (parent1->dirents.find(name1) == parent1->dirents.end())
-	return -1;
+	    return -1;
     if (parent1->dirents[name1] != mv->inum)
-	return -1;
+	    return -1;
     if (parent2->dirents.find(name2) != parent1->dirents.end())
-	return -1;
+	    return -1;
 	    
     parent1->dirents.erase(name1);
     parent2->dirents[name2] = mv->inum;
@@ -832,7 +832,7 @@ int read_log_data(int idx, log_data *d)
 {
     auto it = inode_map.find(d->inum);
     if (it == inode_map.end())
-	return -1;
+	    return -1;
 
     fs_file *f = (fs_file*) inode_map[d->inum];
     
@@ -851,7 +851,7 @@ int read_log_create(log_create *c)
 {
     auto it = inode_map.find(c->parent_inum);
     if (it == inode_map.end())
-	return -1;
+	    return -1;
 
     fs_directory *d = (fs_directory*) inode_map[c->parent_inum];
     auto name = std::string(&c->name[0], c->namelen);
@@ -869,51 +869,51 @@ size_t read_hdr(int idx, void *data, size_t len)
 {
     obj_header *oh = (obj_header*)data;
     if ((size_t)(oh->hdr_len) > len)
-	return oh->hdr_len;
+	    return oh->hdr_len;
 
     if (oh->magic != OBJFS_MAGIC || oh->version != 1 || oh->type != 1)
-	return -1;
+	    return -1;
 
     size_t meta_bytes = oh->hdr_len - sizeof(obj_header);
     log_record *end = (log_record*)&oh->data[meta_bytes];
     log_record *rec = (log_record*)&oh->data[0];
 
     while (rec < end) {
-	switch (rec->type) {
-	case LOG_INODE:
-	    if (read_log_inode((log_inode*)&rec->data[0]) < 0)
-		return -1;
-	    break;
-	case LOG_TRUNC:
-	    if (read_log_trunc((log_trunc*)&rec->data[0]) < 0)
-		return -1;
-	    break;
-	case LOG_DELETE:
-	    if (read_log_delete((log_delete*)&rec->data[0]) < 0)
-		return -1;
-	    break;
-	case LOG_SYMLNK:
-	    if (read_log_symlink((log_symlink*)&rec->data[0]) < 0)
-		return -1;
-	    break;
-	case LOG_RENAME:
-	    if (read_log_rename((log_rename*)&rec->data[0]) < 0)
-		return -1;
-	    break;
-	case LOG_DATA:
-	    if (read_log_data(idx, (log_data*)&rec->data[0]) < 0)
-		return -1;
-	    break;
-	case LOG_CREATE:
-	    if (read_log_create((log_create*)&rec->data[0]) < 0)
-		return -1;
-	    break;
-	case LOG_NULL:
-	    break;
-	default:
-	    return -1;
-	}
-	rec = (log_record*)&rec->data[rec->len];
+        switch (rec->type) {
+            case LOG_INODE:
+                if (read_log_inode((log_inode*)&rec->data[0]) < 0)
+                    return -1;
+                break;
+            case LOG_TRUNC:
+                if (read_log_trunc((log_trunc*)&rec->data[0]) < 0)
+                    return -1;
+                break;
+            case LOG_DELETE:
+                if (read_log_delete((log_delete*)&rec->data[0]) < 0)
+                    return -1;
+                break;
+            case LOG_SYMLNK:
+                if (read_log_symlink((log_symlink*)&rec->data[0]) < 0)
+                    return -1;
+                break;
+            case LOG_RENAME:
+                if (read_log_rename((log_rename*)&rec->data[0]) < 0)
+                    return -1;
+                break;
+            case LOG_DATA:
+                if (read_log_data(idx, (log_data*)&rec->data[0]) < 0)
+                    return -1;
+                break;
+            case LOG_CREATE:
+                if (read_log_create((log_create*)&rec->data[0]) < 0)
+                    return -1;
+                break;
+            case LOG_NULL:
+                break;
+            default:
+                return -1;
+        }
+        rec = (log_record*)&rec->data[rec->len];
     }
     return 0;
 }
@@ -934,12 +934,12 @@ size_t serialize_itable(std::ostream &s,
 {
     size_t bytes = 0;
     for (auto it = inode_map.begin(); it != inode_map.end(); it++) {
-	auto [inum, obj] = *it;
-	auto [offset, len] = map[inum];
-	itable_xp entry = {.inum = inum, .objnum = (uint32_t)this_index,
-			   .offset = offset, .len = len};
-	s.write((char*)&entry, sizeof(entry));
-	bytes += sizeof(entry);
+        auto [inum, obj] = *it;
+        auto [offset, len] = map[inum];
+        itable_xp entry = {.inum = inum, .objnum = (uint32_t)this_index,
+                .offset = offset, .len = len};
+        s.write((char*)&entry, sizeof(entry));
+        bytes += sizeof(entry);
     }
     return bytes;
 }
@@ -1039,21 +1039,19 @@ int test_function(int v)
 void printout(void *hdr, int hdrlen)
 {
     if (!verbose)
-	return;
+	    return;
     uint8_t *p = (uint8_t*) hdr;
     for (int i = 0; i < hdrlen; i++)
-	printf("%02x", p[i]);
+	    printf("%02x", p[i]);
     printf("\n");
 }
 
 void write_everything_out(struct objfs *fs)
 {
     //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("write_everything_out", "N/A");
     for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
 	 it = dirty_inodes.erase(it)) {
-	write_inode(*it);
+	    write_inode(*it);
     }
 
     char _key[1024];
@@ -1061,11 +1059,11 @@ void write_everything_out(struct objfs *fs)
     std::string key(_key);
     
     obj_header h = {
-	.magic = OBJFS_MAGIC,
-	.version = 1,
-	.type = 1,
-	.hdr_len = (int)(meta_offset() + sizeof(obj_header)),
-	.this_index = this_index,
+        .magic = OBJFS_MAGIC,
+        .version = 1,
+        .type = 1,
+        .hdr_len = (int)(meta_offset() + sizeof(obj_header)),
+        .this_index = this_index,
     };
     this_index++;
 
@@ -1076,17 +1074,12 @@ void write_everything_out(struct objfs *fs)
     printf("writing %s:\n", key.c_str());
     printout((void*)&h, sizeof(h));
     printout((void*)meta_log_head, meta_offset());
-    //Profiler *profiler_2 = new Profiler(2);
-    //profiler_2->StartTimer();
+
     //auto start_2 = std::chrono::system_clock::now();
-    S3Status sts = fs->s3->s3_put(key, iov, 3);
     if (S3StatusOK != fs->s3->s3_put(key, iov, 3)){
         printf("PUT FAILED\n");
         throw "put failed";
     }
-    //profiler_2->SetFuncPath("s3_put", "N/A");
-    //profiler_2->StopTimer();
-    //delete profiler_2;
     /*auto now = std::chrono::system_clock::now();
     //std::chrono::duration<double> diff = now - start_2;
     //std::string diff_str = "S3_PUT: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
@@ -1108,11 +1101,9 @@ void fs_sync(void)
 void maybe_write(struct objfs *fs)
 {
     //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("maybe_write", "N/A");
     if ((meta_offset() > meta_log_len) ||
 	(data_offset() > data_log_len))
-	write_everything_out(fs);
+	    write_everything_out(fs);
 
     /*auto now = std::chrono::system_clock::now();
     //std::chrono::duration<double> diff = now - start;
@@ -1124,8 +1115,6 @@ void make_record(const void *hdr, size_t hdrlen,
 		 const void *data, size_t datalen)
 {
     //auto start = std::chrono::system_clock::now();
-    //Profiler profiler;
-    //profiler.SetFuncPath("make_record", "N/A");
 
     printout((void*)hdr, hdrlen);
     
@@ -1171,14 +1160,14 @@ fs_obj *load_obj(struct objfs *fs, int index, uint32_t offset, size_t len)
     char buf[len];
     size_t val = do_read(fs, index, (void*)buf, len, offset, true);
     if (val != len)
-	return nullptr;
+	    return nullptr;
     fs_obj *o = (fs_obj*)buf;
     if (o->type == OBJ_DIR)
-	return new fs_directory((void*)buf, len);
+	    return new fs_directory((void*)buf, len);
     if (o->type == OBJ_FILE)
-	return new fs_file((void*)buf, len);
+	    return new fs_file((void*)buf, len);
     if (o->type == OBJ_SYMLINK)
-	return new fs_link((void*)buf, len);
+	    return new fs_link((void*)buf, len);
     return new fs_obj((void*)buf, len);
 }
 
@@ -1188,12 +1177,12 @@ fs_obj *load_obj(struct objfs *fs, int index, uint32_t offset, size_t len)
 int get_offset(struct objfs *fs, int index, bool ckpt)
 {
     if (data_offsets.find(index) != data_offsets.end())
-	return data_offsets[index];
+        return data_offsets[index];
 
     obj_header h;
     ssize_t len = do_read(fs, index, &h, sizeof(h), 0, ckpt);
     if (len < 0)
-	return -1;
+        return -1;
 
     data_offsets[index] = h.hdr_len;
     return h.hdr_len;
@@ -1205,13 +1194,13 @@ int get_offset(struct objfs *fs, int index, bool ckpt)
 int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
 {
     if (index == this_index) {
-	len = std::min(len, data_offset() - offset);
-	memcpy(buf, offset + (char*)data_log_head, len);
-	return len;
+        len = std::min(len, data_offset() - offset);
+        memcpy(buf, offset + (char*)data_log_head, len);
+        return len;
     }
     size_t n = get_offset(fs, index, false);
     if (n < 0)
-	return n;
+        return n;
     return do_read(fs, index, buf, len, offset + n, false);
 }
 
@@ -1221,8 +1210,8 @@ static std::vector<std::string> split(const std::string& s, char delimiter)
     std::string token;
     std::istringstream tokenStream(s);
     while (std::getline(tokenStream, token, delimiter)) {
-	if (token != "")
-	    tokens.push_back(token);
+        if (token != "")
+            tokens.push_back(token);
     }
     return tokens;
 }
@@ -1399,7 +1388,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     //    inum = fi->fh;
     //} else {
     //    logger->log("WRITE_MISS\n");
-        inum = path_2_inum(path);
+    inum = path_2_inum(path);
     //}
     auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_5 = now - start;
@@ -1627,14 +1616,14 @@ int fs_rmdir(const char *path)
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return -ENOENT;
+	    return -ENOENT;
     }
     if (parent_inum < 0){
         //auto now = std::chrono::system_clock::now();
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return parent_inum;
+	    return parent_inum;
     }
     
     fs_directory *dir = (fs_directory*)inode_map[inum];
@@ -1643,14 +1632,14 @@ int fs_rmdir(const char *path)
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return -ENOTDIR;
+	    return -ENOTDIR;
     }
     if (!dir->dirents.empty()){
         //auto now = std::chrono::system_clock::now();
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_RMDIR: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return -ENOTEMPTY;
+	    return -ENOTEMPTY;
     }
     
     fs_directory *parent = (fs_directory*)inode_map[parent_inum];
@@ -1682,13 +1671,13 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
     start = std::chrono::system_clock::now();
 
     if (inum >= 0)
-	return -EEXIST;
+	    return -EEXIST;
     if (parent_inum < 0)
-	return parent_inum;
+	    return parent_inum;
     
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
     if (dir->type != OBJ_DIR)
-	return -ENOTDIR;
+	    return -ENOTDIR;
     
     inum = next_inode++;
     fs_file *f = new fs_file;	// yeah, OBJ_OTHER gets a useless extent map
@@ -1813,7 +1802,7 @@ int fs_truncate(const char *path, off_t len)
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_TRUNCATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return inum;
+	    return inum;
     }
 
     fs_file *f = (fs_file*)inode_map[inum];
@@ -1823,14 +1812,14 @@ int fs_truncate(const char *path, off_t len)
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_TRUNCATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return -EISDIR;
+	    return -EISDIR;
     }
     if (f->type != OBJ_FILE){
         //auto now = std::chrono::system_clock::now();
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_TRUNCATE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return -EINVAL;
+	    return -EINVAL;
     }
     
     do_trunc(f, len);
@@ -2030,7 +2019,7 @@ int fs_chmod(const char *path, mode_t mode)
         //std::chrono::duration<double> diff = now - start;
         //std::string diff_str = "FS_CHMOD: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
         //logger->log(diff_str);
-	return inum;
+	    return inum;
     }
 
     fs_obj *obj = inode_map[inum];
@@ -2065,14 +2054,14 @@ int fs_utimens(const char *path, const struct timespec tv[2])
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_UTIMENS: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return inum;
+	    return inum;
     }
 
     fs_obj *obj = inode_map[inum];
     if (tv == NULL || tv[1].tv_nsec == UTIME_NOW)
-	clock_gettime(CLOCK_REALTIME, &obj->mtime);
+	    clock_gettime(CLOCK_REALTIME, &obj->mtime);
     else if (tv[1].tv_nsec != UTIME_OMIT)
-	obj->mtime = tv[1];
+	    obj->mtime = tv[1];
     dirty_inodes.insert(obj);
     maybe_write(fs);
     auto now = std::chrono::system_clock::now();
@@ -2134,7 +2123,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     //printf("\n");
     std::chrono::duration<double> diff_lock = end_lock - start_lock;
     seq++;
-    std::string read_str = "FS_READ; SEQ: "+std::to_string(seq) + "; PATH: "+std::string(path) + "\n";
+    std::string read_str = "FS_READ; SEQ: "+std::to_string(seq) + "; PATH: "+std::string(path) + "; LEN: "+std::to_string(len) + "\n";
     logger->log(read_str);
     auto start = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
@@ -2145,7 +2134,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     //    inum = fi->fh;
     //} else {
     //    logger->log("READ_MISS\n");
-        inum = path_2_inum(path);
+    inum = path_2_inum(path);
     //}
 
     auto now = std::chrono::system_clock::now();
@@ -2172,24 +2161,27 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     size_t bytes = 0;
     
     for (auto it = f->extents.lookup(offset);
-	 len > 0 && len > bytes && it != f->extents.end(); it++) {
+	 len > 0 /*&& len > bytes*/ && it != f->extents.end(); it++) {
+         //TODO: len > 0 && it != f->extents.end(); it++) {
 	    auto [base, e] = *it;
         //logger->log("PATH: " + std::string(path) + "; OFFSET: " + std::to_string(offset) + "; BASE: " + std::to_string(base) + "\n" );
         if (base > offset) {
             // yow, not supposed to have holes
-            size_t skip = base-offset;
-            if (skip > len)
-            skip = len;
+            size_t skip = base-offset; // bytes to skip forward from current 'offset'
+            if (skip > len) // extent is past end of requested read
+               skip = len;
             bytes += skip;
             offset += skip;
             buf += skip;
+
+            len -= skip;
         }
         else {
             //logger->log("ELSE;\n");
             size_t skip = offset - base;
-            size_t _len = e.len - skip;
+            size_t _len = e.len - skip;  // length of buffer to consume (unmapped=skip,mapped)
             if (_len > len)
-            _len = len;
+                _len = len;
             if (read_data(fs, buf, e.objnum, e.offset+skip, _len) < 0){
                 now = std::chrono::system_clock::now();
                 std::chrono::duration<double> diff = now - start;
@@ -2202,6 +2194,9 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
             bytes += _len;
             offset += _len;
             buf += _len;
+
+            len -= _len;
+            // TODO: need to reduce remaining length
         }
     }
     //printf("%zu", bytes);
@@ -2211,7 +2206,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     std::chrono::duration<double> diff = now - start;
     std::string diff_str_2 = "PATH_2_INUM: "+std::to_string(diff_2.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str_2);
-    std::string diff_str = "FS_READ_EXCLUSIVE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+ "; READ_SIZE: " + std::to_string(bytes) + "\n";
+    std::string diff_str = "FS_READ_EXCLUSIVE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+ "; READ_SIZE: " + std::to_string(bytes)+ "; STRLEN: " + std::to_string(strlen(buf))  + "\n";
     logger->log(diff_str);
     std::string diff_str_lock = "FS_READ_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str_lock);
@@ -2251,14 +2246,14 @@ int fs_symlink(const char *path, const char *contents)
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_SYMLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return -EEXIST;
+	    return -EEXIST;
     }
     if (parent_inum < 0){
         //auto now = std::chrono::system_clock::now();
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_SYMLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return parent_inum;
+	    return parent_inum;
     }
 
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
@@ -2267,7 +2262,7 @@ int fs_symlink(const char *path, const char *contents)
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_SYMLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return -ENOTDIR;
+	    return -ENOTDIR;
     }
     
     fs_link *l = new fs_link;
@@ -2315,7 +2310,7 @@ int fs_readlink(const char *path, char *buf, size_t len)
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_READLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return inum;
+	    return inum;
     }
 
     fs_link *l = (fs_link*)inode_map[inum];
@@ -2324,7 +2319,7 @@ int fs_readlink(const char *path, char *buf, size_t len)
     //std::chrono::duration<double> diff = now - start;
     //std::string diff_str = "FS_READLINK: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
     //logger->log(diff_str);
-	return -EINVAL;
+	    return -EINVAL;
     }
 
     size_t val = std::min(len, l->target.length());
@@ -2411,31 +2406,30 @@ void *fs_init(struct fuse_conn_info *conn)
     meta_log_len = 64 * 1024;
     meta_log_head = meta_log_tail = malloc(meta_log_len*2);
     data_log_len = 2 * 8 * 1024 * 1024;
-    data_log_head = data_log_tail = malloc(data_log_len);
+    data_log_head = data_log_tail = malloc(data_log_len*2);//);  // TODO: what length?
 
     fs->s3 = new s3_target(fs->host, fs->bucket, fs->access, fs->secret, false);
 
     std::list<std::string> keys;
-    // TODO: error here
-    S3Status sts = fs->s3->s3_list(fs->prefix, keys);
+    //S3Status sts = fs->s3->s3_list(fs->prefix, keys);
     if (S3StatusOK != fs->s3->s3_list(fs->prefix, keys))
-	throw "bucket list failed";
+        throw "bucket list failed";
 
     for (auto it = keys.begin(); it != keys.end(); it++) {
-	int n;
-	printf("key: %s\n", it->c_str());
-	sscanf(it->c_str(), "%*[^.].%d", &n);
-	ssize_t offset = get_offset(fs, n, false);
+        int n;
+        printf("key: %s\n", it->c_str());
+        sscanf(it->c_str(), "%*[^.].%d", &n);
+        ssize_t offset = get_offset(fs, n, false);
 
-	if (offset < 0)
-	    throw "bad object";
-	void *buf = malloc(offset);
-	struct iovec iov[] = {{.iov_base = buf, .iov_len = (size_t)offset}};
-	if (S3StatusOK != fs->s3->s3_get(it->c_str(), 0, offset, iov, 1))
-	    throw "can't read header";
-	if (read_hdr(n, buf, offset) < 0)
-	    throw "bad header";
-	this_index = n+1;
+        if (offset < 0)
+            throw "bad object";
+        void *buf = malloc(offset);
+        struct iovec iov[] = {{.iov_base = buf, .iov_len = (size_t)offset}};
+        if (S3StatusOK != fs->s3->s3_get(it->c_str(), 0, offset, iov, 1))
+            throw "can't read header";
+        if (read_hdr(n, buf, offset) < 0)
+            throw "bad header";
+        this_index = n+1;
     }
 
     auto now = std::chrono::system_clock::now();
@@ -2452,11 +2446,12 @@ void fs_teardown(void)
     //printf("fs_teardown\n");
     for (auto it = inode_map.begin(); it != inode_map.end();
 	 it = inode_map.erase(it)) ;
+    
     this_index = 0;
 
     for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
 	 it = dirty_inodes.erase(it));
-
+    
     free(meta_log_head);
     free(data_log_head);
 
