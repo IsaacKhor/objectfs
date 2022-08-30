@@ -316,10 +316,10 @@ size_t fs_file::serialize(std::ostream &s)
 
     // TODO - merge adjacent extents (not sure it ever happens...)
     for (auto it = extents.begin(); it != extents.end(); it++) {
-	auto [file_offset, ext] = *it;
-	extent_xp _e = {.file_offset = file_offset, .objnum = ext.objnum,
-			.obj_offset = ext.offset, .len = ext.len};
-	s.write((char*)&_e, sizeof(_e));
+        auto [file_offset, ext] = *it;
+        extent_xp _e = {.file_offset = file_offset, .objnum = ext.objnum,
+                .obj_offset = ext.offset, .len = ext.len};
+        s.write((char*)&_e, sizeof(_e));
     }
     return bytes;
 }
@@ -364,10 +364,10 @@ fs_directory::fs_directory(void *ptr, size_t len)
     dirent_xp *de = (dirent_xp*)(sizeof(fs_obj) + (char*)ptr);
 
     while (len > 0) {
-	std::string name(de->name, de->namelen);
-	dirents[name] = de->inum;
-	// TODO - do something with offset/len
-	len -= (sizeof(*de) + de->namelen);
+        std::string name(de->name, de->namelen);
+        dirents[name] = de->inum;
+        // TODO - do something with offset/len
+        len -= (sizeof(*de) + de->namelen);
     }
     assert(len == 0);
 }
@@ -376,8 +376,8 @@ size_t fs_directory::length(void)
 {
     size_t bytes = sizeof(fs_obj);
     for (auto it = dirents.begin(); it != dirents.end(); it++) {
-	auto [name,inum] = *it;
-	bytes += (sizeof(dirent_xp) + name.length());
+        auto [name,inum] = *it;
+        bytes += (sizeof(dirent_xp) + name.length());
     }
     return bytes;
 }
@@ -390,13 +390,13 @@ size_t fs_directory::serialize(std::ostream &s,
     s.write((char*)&hdr, sizeof(hdr));
     
     for (auto it = dirents.begin(); it != dirents.end(); it++) {
-	auto [name, inum] = *it;
-	auto[offset,len] = map[inum];
-	uint8_t namelen = name.length();
-	dirent_xp de = {.inum = inum, .offset = offset,
-			.len = len, .namelen = namelen};
-	s.write((char*)&de, sizeof(de));
-	s.write(name.c_str(), namelen);
+        auto [name, inum] = *it;
+        auto[offset,len] = map[inum];
+        uint8_t namelen = name.length();
+        dirent_xp de = {.inum = inum, .offset = offset,
+                .len = len, .namelen = namelen};
+        s.write((char*)&de, sizeof(de));
+        s.write(name.c_str(), namelen);
     }
     return bytes;
 }
@@ -565,87 +565,6 @@ void Logger::log(std::string info) {
 
 Logger* logger = new Logger("/mnt/ramdisk/log.txt");
 
-class Profiler {
-    std::chrono::time_point<std::chrono::system_clock> timestamp;
-    pid_t pid;
-    std::thread::id tid;
-    std::string func_name;
-    std::string path;
-    size_t size;
-    int flag;
-
-public:
-    Profiler();
-    Profiler(int input_flag);
-    void SetFuncPath(std::string func, std::string input_path);
-    ~Profiler();
-    void SetSize(size_t input_size);
-    void StartTimer();
-    void StopTimer();
-};
-
-void Profiler::StartTimer(){
-    timestamp = std::chrono::system_clock::now();
-}
-
-void Profiler::StopTimer(){
-    auto end = std::chrono::system_clock::now();
-    //std::chrono::duration<double> diff = end - timestamp;
-    std::stringstream ss;
-    ss << tid;
-    /*std::string info = "Time: " + std::to_string(diff.count()) + "; PID: " + std::to_string(pid) +
-            "; TID: " + ss.str() + "; Function: " + func_name + "; Path: " + path + "; Size: " + 
-            std::to_string(size) + "\n";*/
-    //logger->log(info);
-}
-
-Profiler::Profiler(){
-    pid = getpid();
-    tid = std::this_thread::get_id();
-    func_name = "";
-    path = "";
-    size = -1;
-    timestamp = std::chrono::system_clock::now();
-    flag = 1;
-}
-
-Profiler::Profiler(int input_flag){
-    flag = input_flag;
-    pid = getpid();
-    tid = std::this_thread::get_id();
-    func_name = "";
-    path = "";
-    size = -1;
-    if (flag == 1){
-        timestamp = std::chrono::system_clock::now();
-    }
-}
-
-/*Profiler::~Profiler(void) {
-    if (flag == 1) {
-        auto end = std::chrono::system_clock::now();
-        std::chrono::duration<double> diff = end - timestamp;
-        std::stringstream ss;
-        ss << tid;
-        std::string info = "Time: " + std::to_string(diff.count()) + "; PID: " + std::to_string(pid) +
-            "; TID: " + ss.str() + "; Function: " + func_name + "; Path: " + path + "; Size: " + 
-            std::to_string(size) + "\n";
-        if (func_name.compare("fs_read") == 0) {
-            printf("FS_READ SIZE: %zu\n", size);
-        }
-        logger->log(info);
-    }
-}*/
-
-void Profiler::SetFuncPath(std::string func, std::string input_path) {
-    func_name = func;
-    path = input_path;
-}
-
-void Profiler::SetSize(size_t input_size) {
-    size = input_size;
-}
-
 /* until we add metadata objects this is enough global state
  */
 std::unordered_map<uint32_t, fs_obj*>    inode_map;
@@ -658,18 +577,18 @@ size_t serialize_tree(std::ostream &s, size_t offset, uint32_t inum,
     fs_obj *obj = inode_map[inum];
     
     if (obj->type != OBJ_DIR) {
-	size_t len = obj->serialize(s);
-	map[inum] = std::make_pair(offset, len);
-	return offset + len;
+        size_t len = obj->serialize(s);
+        map[inum] = std::make_pair(offset, len);
+        return offset + len;
     }
     else {
-	fs_directory *dir = (fs_directory*)obj;
-	for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
-	    auto [name,inum2] = *it;
-	    offset = serialize_tree(s, offset, inum2, map);
-	}
-	size_t len = dir->serialize(s, map);
-	return offset + len;
+	    fs_directory *dir = (fs_directory*)obj;
+        for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
+            auto [name,inum2] = *it;
+            offset = serialize_tree(s, offset, inum2, map);
+        }
+        size_t len = dir->serialize(s, map);
+        return offset + len;
     }
 }
 
@@ -1151,7 +1070,7 @@ int do_read(struct objfs *fs, int index, void *buf, size_t len, size_t offset, b
     auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff = now - start;
     std::string diff_str = "S3_GET: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+"\n";
-    logger->log(diff_str);
+    //logger->log(diff_str);
     return len;
 }
 
@@ -1330,7 +1249,14 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
     seq++;
     auto start = std::chrono::system_clock::now();
 
-    int inum = path_2_inum(path);
+    int inum;
+    if (fi->fh != 0) {
+        //logger->log("READ_HIT\n");
+        inum = fi->fh;
+    } else {
+        //logger->log("READ_MISS\n");
+        inum = path_2_inum(path);
+    }
     if (inum < 0){
         //auto now = std::chrono::system_clock::now();
     //std::chrono::duration<double> diff = now - start;
@@ -1350,11 +1276,11 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
     
     fs_directory *dir = (fs_directory*)obj;
     for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
-	struct stat sb;
-	auto [name, i] = *it;
-	fs_obj *o = inode_map[i];
-	obj_2_stat(&sb, o);
-	filler(ptr, const_cast<char*>(name.c_str()), &sb, 0);
+        struct stat sb;
+        auto [name, i] = *it;
+        fs_obj *o = inode_map[i];
+        obj_2_stat(&sb, o);
+        filler(ptr, const_cast<char*>(name.c_str()), &sb, 0);
     }
     auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff = now - start;
@@ -1383,13 +1309,13 @@ int fs_write(const char *path, const char *buf, size_t len,
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum;
-    //if (fi->fh != 0) {
-    //    logger->log("WRITE_HIT\n");
-    //    inum = fi->fh;
-    //} else {
-    //    logger->log("WRITE_MISS\n");
-    inum = path_2_inum(path);
-    //}
+    if (fi->fh != 0) {
+        //logger->log("WRITE_HIT\n");
+        inum = fi->fh;
+    } else {
+        //logger->log("WRITE_MISS\n");
+        inum = path_2_inum(path);
+    }
     auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_5 = now - start;
     start = std::chrono::system_clock::now();
@@ -2129,13 +2055,13 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum;
-    //if (fi->fh != 0) {
-    //    logger->log("READ_HIT\n");
-    //    inum = fi->fh;
-    //} else {
-    //    logger->log("READ_MISS\n");
-    inum = path_2_inum(path);
-    //}
+    if (fi->fh != 0) {
+        //logger->log("READ_HIT\n");
+        inum = fi->fh;
+    } else {
+        //logger->log("READ_MISS\n");
+        inum = path_2_inum(path);
+    }
 
     auto now = std::chrono::system_clock::now();
     std::chrono::duration<double> diff_2 = now - start;
@@ -2206,7 +2132,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     std::chrono::duration<double> diff = now - start;
     std::string diff_str_2 = "PATH_2_INUM: "+std::to_string(diff_2.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str_2);
-    std::string diff_str = "FS_READ_EXCLUSIVE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq)+ "; READ_SIZE: " + std::to_string(bytes)+ "; STRLEN: " + std::to_string(strlen(buf))  + "\n";
+    std::string diff_str = "FS_READ_EXCLUSIVE: "+std::to_string(diff.count())+"; SEQ: "+std::to_string(seq) + "\n";
     logger->log(diff_str);
     std::string diff_str_lock = "FS_READ_LOCK: "+std::to_string(diff_lock.count())+"; SEQ: "+std::to_string(seq)+"\n";
     logger->log(diff_str_lock);
