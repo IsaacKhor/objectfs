@@ -44,6 +44,7 @@
 #include <sstream>
 #include <cassert>
 #include <atomic>
+#include <future>
 
 #include <sys/uio.h>
 #include <list>
@@ -1019,10 +1020,14 @@ void write_everything_out(struct objfs *fs)
     printout((void*)&h, sizeof(h));
     printout((void*)meta_log_head_old, meta_log_size);
 
-    if (S3StatusOK != fs->s3->s3_put(key, iov, 3)){
+    std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_put, fs->s3, key, iov, 3);
+    if (S3StatusOK != status.get()){
         printf("PUT FAILED\n");
         throw "put failed";
     }
+
+    free(meta_log_head_old);
+    free(data_log_head_old);
     //meta_log_tail = meta_log_head;
     //data_log_tail = data_log_head;
 }
@@ -1069,7 +1074,8 @@ int do_read(struct objfs *fs, int index, void *buf, size_t len, size_t offset, b
     char key[256];
     sprintf(key, "%s.%08x%s", fs->prefix, index, ckpt ? ".ck" : "");
     struct iovec iov = {.iov_base = buf, .iov_len = (size_t)len};
-    if (S3StatusOK != fs->s3->s3_get(key, offset, len, &iov, 1)){
+    std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_get, fs->s3, key, offset, len, &iov, 1);
+    if (S3StatusOK != status.get()){
         return -1;
     }
     return len;
@@ -1913,7 +1919,8 @@ void *fs_init(struct fuse_conn_info *conn)
             throw "bad object";
         void *buf = malloc(offset);
         struct iovec iov[] = {{.iov_base = buf, .iov_len = (size_t)offset}};
-        if (S3StatusOK != fs->s3->s3_get(it->c_str(), 0, offset, iov, 1))
+        std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_get, fs->s3, it->c_str(), 0, offset, iov, 1);
+        if (S3StatusOK != status.get())
             throw "can't read header";
         if (read_hdr(n, buf, offset) < 0)
             throw "bad header";
