@@ -3,8 +3,9 @@ import unittest
 import objtest as obj
 import os, sys
 import ctypes
+import shutil
 
-prefix = '/tmp/testing/image'
+prefix = '/local0/mount1'
 
 def div_round_up(n, m):
     return (n + m - 1) // m
@@ -262,8 +263,8 @@ class tests(unittest.TestCase):
         data = data[0:filesz]
         if filesz == 37000 and opsz == 17:
             obj.lib.test_function(ctypes.c_int(0))
-        v,data2 = obj.read(path, len(data)+100, 0)
-        self.assertOK(v, 'read %s len=%d' % (path, len(data)+100))
+        v,data2 = obj.read(path, len(data),0)
+        self.assertOK(v, 'read %s len=%d' % (path, len(data)))
         if data != data2:
             i = longest(data,data2)
             print('len=%d missmatch at %d' % (len(data), longest(data,data2)))
@@ -425,8 +426,8 @@ class tests(unittest.TestCase):
         v = obj.rename(f2, d2)
         self.assertEqual(-v, obj.EEXIST)
 
-        v = obj.rename(f2, d2 + '/zz')
-        self.assertTrue(v == 0 or -v == obj.EINVAL, msg='%s->%s = %d' % (f2,d2,v))
+        #v = obj.rename(f2, d2 + '/zz')
+        #self.assertTrue(v == 0 or -v == obj.EINVAL, msg='%s->%s = %d' % (f2,d2,v))
 
         v = obj.rename(d2 + 'bad', d1)
         self.assertTrue(-v == obj.ENOENT)
@@ -518,17 +519,22 @@ class tests(unittest.TestCase):
             v,sb = obj.getattr(path)
             self.assertOK(v, 'getattr(%s)' % path)
             self.assertEqual(sb.st_size, 0)
+
         
 if __name__ == '__main__':
-
-    dir = os.path.dirname(prefix)
+    os.system("python3 minio_cli.py")
+    dir = "/local0/mount1"
     try:
         for de in os.scandir(dir):
-            print('deleting: ', dir+'/'+de.name)
-            val = os.unlink(dir + '/' + de.name)
+            if os.path.isfile(dir + '/' + de.name):
+                print('deleting file: ', dir+'/'+de.name)
+                val = os.unlink(dir + '/' + de.name) 
+            else:
+                print('deleting dir: ', dir+'/'+de.name)
+                shutil.rmtree(dir + '/' + de.name)
     except OSError(e):
         pass
-
+    '''
     try:
         os.mkdir(dir)
     except OSError:
@@ -541,8 +547,9 @@ if __name__ == '__main__':
     fp = open(prefix + '.00000000', 'wb')
     fp.write(fs)
     fp.close()
-
-    obj.init(prefix)
+    '''
+    obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 1*1024*1024)
+    obj.init("prefix1")
 #    obj.lib.test_function(ctypes.c_int(1))
     unittest.main()
     

@@ -61,6 +61,9 @@ std::mutex global_mutex;
 std::mutex inode_mutex;
 std::mutex log_mutex;
 
+std::atomic<int> next_inode (3); // the root "" has inum 2
+std::mutex next_inode_mutex;
+
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
 
@@ -638,16 +641,14 @@ static int read_log_inode(log_inode *in)
     auto it = inode_map.find(in->inum);
     if (it != inode_map.end()) {
         auto obj = inode_map[in->inum];
-        update_inode(obj, in);
         inode_mutex.unlock();
+        update_inode(obj, in);
     }
     else {
         if (S_ISDIR(in->mode)) {
             fs_directory *d = new fs_directory;
-            d->lock();
             d->type = OBJ_DIR;
             d->size = 0;
-            d->unlock();
             //inode_map[in->inum] = d;
             inode_mutex.unlock();
             set_inode_map(in->inum, d);
@@ -655,31 +656,29 @@ static int read_log_inode(log_inode *in)
         }
         else if (S_ISREG(in->mode)) {
             fs_file *f = new fs_file;
-            f->lock();
             f->type = OBJ_FILE;
             f->size = 0;
-            f->unlock();
+            inode_mutex.unlock();
             update_inode(f, in);
             //inode_map[in->inum] = f;
-            inode_mutex.unlock();
             set_inode_map(in->inum, f);
         }
         else if (S_ISLNK(in->mode)) {
             fs_link *s = new fs_link;
             s->type = OBJ_SYMLINK;
-            update_inode(s, in);
             s->size = 0;
-            //inode_map[in->inum] = s;
             inode_mutex.unlock();
+            update_inode(s, in);
+            //inode_map[in->inum] = s;
             set_inode_map(in->inum, s);
         }
         else {
             fs_obj *o = new fs_obj;
             o->type = OBJ_OTHER;
-            update_inode(o, in);
             o->size = 0;
-            //inode_map[in->inum] = o;
             inode_mutex.unlock();
+            update_inode(o, in);
+            //inode_map[in->inum] = o;
             set_inode_map(in->inum, o);
         }
     }
@@ -718,9 +717,10 @@ int read_log_trunc(log_trunc *tr)
     fs_file *f = (fs_file*)(inode_map[tr->inum]);
     inode_mutex.unlock();
     f->lock();
-    if (f->size < tr->new_size)
-        f->lock();
+    if (f->size < tr->new_size){
+        f->unlock();
 	    return -1;
+    }
     f->unlock();
     do_trunc(f, tr->new_size);
     return 0;
@@ -789,18 +789,18 @@ static int read_log_rename(log_rename *mv)
         parent1->unlock();
 	    return -1;
     }
-    //parent1->unlock();
+    parent1->unlock();
     parent2->lock();
     if (parent2->dirents.find(name2) != parent2->dirents.end()){
         parent2->unlock();
 	    return -1;
     }
-    //parent2->unlock();
+    parent2->unlock();
 	
-    //parent1->lock();
+    parent1->lock();
     parent1->dirents.erase(name1);
     parent1->unlock();
-    //parent2->lock();
+    parent2->lock();
     parent2->dirents[name2] = mv->inum;
     parent2->unlock();
     
@@ -827,9 +827,6 @@ int read_log_data(int idx, log_data *d)
     return 0;
 }
 
-//int next_inode = 2;
-std::atomic<int> next_inode (2);
-std::mutex next_inode_mutex;
 
 int read_log_create(log_create *c)
 {
@@ -927,10 +924,10 @@ size_t serialize_itable(std::ostream &s,
     for (auto it = inode_map.begin(); it != inode_map.end(); it++) {
         auto [inum, obj] = *it;
         auto [offset, len] = map[inum];
-        log_mutex.lock();
+        //log_mutex.lock();
         itable_xp entry = {.inum = inum, .objnum = (uint32_t)this_index,
                 .offset = offset, .len = len};
-        log_mutex.unlock();
+        //log_mutex.unlock();
         s.write((char*)&entry, sizeof(entry));
         bytes += sizeof(entry);
     }
@@ -1042,10 +1039,6 @@ void printout(void *hdr, int hdrlen)
 
 void write_everything_out(struct objfs *fs)
 {
-    /*for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
-	 it = dirty_inodes.erase(it)) {
-	    write_inode(*it);
-    }*/
 
     size_t meta_log_size = meta_offset();
     void *meta_log_head_old = meta_log_head;
@@ -1054,10 +1047,8 @@ void write_everything_out(struct objfs *fs)
     size_t data_log_size = data_offset();
     void *data_log_head_old = data_log_head;
     data_log_head = data_log_tail = malloc(data_log_len*2);
-    //log_mutex.unlock();
 
     char _key[1024];
-    //log_mutex.lock();
     sprintf(_key, "%s.%08x", fs->prefix, this_index.load());
     std::string key(_key);
     
@@ -1069,13 +1060,12 @@ void write_everything_out(struct objfs *fs)
         .this_index = this_index,
     };
     this_index++;
-    log_mutex.unlock();
 
     struct iovec iov[3] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
 			   {.iov_base = meta_log_head_old, .iov_len = meta_log_size},
 			   {.iov_base = data_log_head_old, .iov_len = data_log_size}};
     
-    printf("writing %s:\n", key.c_str());
+    printf("writing %s, meta log size: %d, data log size: %d\n", key.c_str(), meta_log_size, data_log_size);
     printout((void*)&h, sizeof(h));
     printout((void*)meta_log_head_old, meta_log_size);
 
@@ -1087,8 +1077,7 @@ void write_everything_out(struct objfs *fs)
 
     free(meta_log_head_old);
     free(data_log_head_old);
-    //meta_log_tail = meta_log_head;
-    //data_log_tail = data_log_head;
+    log_mutex.unlock();
 }
 
 void fs_sync(void)
@@ -1102,6 +1091,7 @@ void maybe_write(struct objfs *fs)
 {
     log_mutex.lock();
     if ((meta_offset() > meta_log_len) || (data_offset() > data_log_len)) {
+        //printf("OVER THRESHOLD \n");
 	    write_everything_out(fs);
     }
     else {
@@ -1112,7 +1102,6 @@ void maybe_write(struct objfs *fs)
 void make_record(const void *hdr, size_t hdrlen,
 		 const void *data, size_t datalen)
 {
-
     printout((void*)hdr, hdrlen);
     
     const std::lock_guard<std::mutex> lock(log_mutex);
@@ -1215,7 +1204,8 @@ static std::vector<std::string> split(const std::string& s, char delimiter)
 //
 static int vec_2_inum(std::vector<std::string> pathvec)
 {
-    uint32_t inum = 1;
+    //uint32_t inum = 1;
+    uint32_t inum = 2;
 
     const std::lock_guard<std::mutex> lock(inode_mutex);
     for (auto it = pathvec.begin(); it != pathvec.end(); it++) {
@@ -1254,7 +1244,14 @@ std::tuple<int,int,std::string> path_2_inum2(const char* path)
 
     auto leaf = pathvec.back();
     pathvec.pop_back();
-    int parent_inum = vec_2_inum(pathvec);
+    int parent_inum;
+    if (pathvec.size()==0) {
+        parent_inum = 2;
+    } else {
+        parent_inum = vec_2_inum(pathvec);
+    }
+    //printf(path);
+    //printf("\n%d\n", parent_inum);
 
     return make_tuple(inum, parent_inum, leaf);
 }
@@ -1350,9 +1347,6 @@ int fs_write(const char *path, const char *buf, size_t len,
     f->lock();
     off_t new_size = std::max((off_t)(offset+len), (off_t)(f->size));
     f->unlock();
-    log_mutex.lock();
-    size_t obj_offset = data_offset();
-    log_mutex.unlock();
 
     int hdr_bytes = sizeof(log_record) + sizeof(log_data);
     char hdr[hdr_bytes];
@@ -1362,6 +1356,10 @@ int fs_write(const char *path, const char *buf, size_t len,
     lr->type = LOG_DATA;
     lr->len = sizeof(log_data);
 
+    log_mutex.lock();
+    size_t obj_offset = data_offset();
+    //log_mutex.unlock();
+
     *ld = (log_data) { .inum = (uint32_t)inum,
 		       .obj_offset = (uint32_t)obj_offset,
 		       .file_offset = (int64_t)offset,
@@ -1369,13 +1367,18 @@ int fs_write(const char *path, const char *buf, size_t len,
 		       .len = (uint32_t)len };
 
 
-    make_record((void*)hdr, hdr_bytes, buf, len);
+    //make_record((void*)hdr, hdr_bytes, buf, len);
+    memcpy(meta_log_tail, hdr, hdr_bytes);
+    meta_log_tail = hdr_bytes + (char*)meta_log_tail;
+    if (len > 0) {
+        memcpy(data_log_tail, buf, len);
+        data_log_tail = len + (char*)data_log_tail;
+    }
+    log_mutex.unlock();
 
-    // optimization - check if it extends the previous record?
-    log_mutex.lock();
+    // TODO: optimization - check if it extends the previous record?
     extent e = {.objnum = (uint32_t)this_index,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
-    log_mutex.unlock();
     
     f->lock();
     f->extents.update(offset, e);
@@ -1444,14 +1447,15 @@ int fs_mkdir(const char *path, mode_t mode)
     if (parent->type != OBJ_DIR){
         return -ENOTDIR;
     }
+    //printf("PARENT VALID %s\n", path);
     
     next_inode_mutex.lock();
     inum = next_inode++;
+    next_inode_mutex.unlock();
     fs_directory *dir = new fs_directory;
     dir->lock();
     dir->type = OBJ_DIR;
     dir->inum = inum;
-    next_inode_mutex.unlock();
     dir->mode = mode | S_IFDIR;
     dir->rdev = dir->size = 0;
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
@@ -1461,7 +1465,7 @@ int fs_mkdir(const char *path, mode_t mode)
     dir->gid = ctx->gid;
     dir->unlock();
     
-    //inode_map[inum] = dir;
+    //printf("SET Inum: %d\n", inum);
     set_inode_map(inum, dir);
     parent->lock();
     parent->dirents[leaf] = inum;
@@ -1556,7 +1560,6 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
     inum = next_inode++;
     fs_file *f = new fs_file;	// yeah, OBJ_OTHER gets a useless extent map
 
-    f->lock();
     f->type = type;
     f->inum = inum;
     next_inode_mutex.unlock();
@@ -1568,7 +1571,6 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
     struct fuse_context *ctx = fuse_get_context();
     f->uid = ctx->uid;
     f->gid = ctx->gid;
-    f->unlock();
     
     //inode_map[inum] = f;
     set_inode_map(inum, f);
@@ -1742,7 +1744,7 @@ int fs_rename(const char *src_path, const char *dst_path)
 
     inode_mutex.lock();
     fs_directory *srcdir = (fs_directory*)inode_map[src_parent];
-    fs_directory *dstdir = (fs_directory*)inode_map[src_parent];
+    fs_directory *dstdir = (fs_directory*)inode_map[dst_parent];
     inode_mutex.unlock();
 
     if (dstdir->type != OBJ_DIR){
@@ -2015,7 +2017,8 @@ void *fs_init(struct fuse_conn_info *conn)
 
     // initialization - FIXME
     log_mutex.lock();
-    meta_log_len = 64 * 1024;
+    printf("INIT\n");
+    meta_log_len = 2 * 64 * 1024;
     meta_log_head = meta_log_tail = malloc(meta_log_len*2);
     data_log_len = 2 * 8 * 1024 * 1024;
     data_log_head = data_log_tail = malloc(data_log_len*2);//);  // TODO: what length?
@@ -2026,11 +2029,13 @@ void *fs_init(struct fuse_conn_info *conn)
     std::list<std::string> keys;
     if (S3StatusOK != fs->s3->s3_list(fs->prefix, keys))
         throw "bucket list failed";
-
+    
+    int n;
+    this_index = 0;
     for (auto it = keys.begin(); it != keys.end(); it++) {
-        int n;
-        printf("key: %s\n", it->c_str());
-        sscanf(it->c_str(), "%*[^.].%d", &n);
+        //int n;
+        //printf("key: %s\n", it->c_str());
+        sscanf(it->c_str(), "%*[^.].%08x", &n);
         ssize_t offset = get_offset(fs, n, false);
 
         if (offset < 0)
@@ -2042,10 +2047,25 @@ void *fs_init(struct fuse_conn_info *conn)
             throw "can't read header";
         if (read_hdr(n, buf, offset) < 0)
             throw "bad header";
-        log_mutex.lock();
-        this_index = n+1;
-        log_mutex.unlock();
+        this_index = std::max(n+1, this_index.load());
     }
+
+    // Put the root dir "" into inode map with inum = 2
+    if (inode_map.find(2) == inode_map.end()){
+        fs_directory *d = new fs_directory;
+        d->type = OBJ_DIR;
+        d->rdev = d->size = 0;
+        d->inum = 2;
+        d->mode = S_IFDIR;
+        set_inode_map(2, d);
+        clock_gettime(CLOCK_REALTIME, &d->mtime);
+
+        struct fuse_context *ctx = fuse_get_context();
+        d->uid = ctx->uid;
+        d->gid = ctx->gid;
+        write_inode(d);
+    }
+
 
     return (void*) fs;
 }
@@ -2057,9 +2077,9 @@ void fs_teardown(void)
 	 it = inode_map.erase(it)) ;
     inode_mutex.unlock();
     
-    log_mutex.lock();
+    //log_mutex.lock();
     this_index = 0;
-    log_mutex.unlock();
+    //log_mutex.unlock();
 
     /*for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
 	 it = dirty_inodes.erase(it));*/
@@ -2073,17 +2093,17 @@ void fs_teardown(void)
 	 it = data_offsets.erase(it));
 
     next_inode_mutex.lock();
-    next_inode = 2;
+    next_inode = 3;
     next_inode_mutex.unlock();
 }
 
 #if 0
 int fs_mkfs(const char *prefix)
 {
-    if (this_index != 0)
+    /*if (this_index != 0)
 	return -1;
     
-    init_stuff(prefix);
+    init_stuff(prefix);*/
 
     auto root = new fs_directory;
     root->inum = 1;
@@ -2095,8 +2115,8 @@ int fs_mkfs(const char *prefix)
     clock_gettime(CLOCK_REALTIME, &root->mtime);
 
     write_inode(root);
-    log_mutex.lock();
-    write_everything_out(fs);
+    //log_mutex.lock();
+    //write_everything_out(fs);
 
     return 0;
 }
