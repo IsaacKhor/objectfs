@@ -1095,7 +1095,6 @@ void write_everything_out(struct objfs *fs)
     meta_log_sizes.erase(index);
     data_log_sizes.erase(index);
     old_log_mutex.unlock();
-    //log_mutex.unlock();
 }
 
 void fs_sync(void)
