@@ -60,9 +60,14 @@
 std::mutex global_mutex;
 std::mutex inode_mutex;
 std::mutex log_mutex;
+std::mutex old_log_mutex;
 
 std::atomic<int> next_inode (3); // the root "" has inum 2
 std::mutex next_inode_mutex;
+std::map<int, void *> meta_log_buffer; // Before a log object is commited to back end, it sits here for read requests
+std::map<int, void *> data_log_buffer; // keys are object indices, values are objects
+std::map<int, size_t> meta_log_sizes; 
+std::map<int, size_t> data_log_sizes;
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -1039,7 +1044,7 @@ void printout(void *hdr, int hdrlen)
 
 void write_everything_out(struct objfs *fs)
 {
-
+    int index = this_index;
     size_t meta_log_size = meta_offset();
     void *meta_log_head_old = meta_log_head;
     meta_log_head = meta_log_tail = malloc(meta_log_len*2);
@@ -1047,6 +1052,11 @@ void write_everything_out(struct objfs *fs)
     size_t data_log_size = data_offset();
     void *data_log_head_old = data_log_head;
     data_log_head = data_log_tail = malloc(data_log_len*2);
+
+    meta_log_buffer[this_index] = meta_log_head_old;
+    data_log_buffer[this_index] = data_log_head_old;
+    meta_log_sizes[this_index] = meta_log_size;
+    data_log_sizes[this_index] = data_log_size;
 
     char _key[1024];
     sprintf(_key, "%s.%08x", fs->prefix, this_index.load());
@@ -1060,6 +1070,7 @@ void write_everything_out(struct objfs *fs)
         .this_index = this_index,
     };
     this_index++;
+    log_mutex.unlock();
 
     struct iovec iov[3] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
 			   {.iov_base = meta_log_head_old, .iov_len = meta_log_size},
@@ -1067,17 +1078,24 @@ void write_everything_out(struct objfs *fs)
     
     printf("writing %s, meta log size: %d, data log size: %d\n", key.c_str(), meta_log_size, data_log_size);
     printout((void*)&h, sizeof(h));
-    printout((void*)meta_log_head_old, meta_log_size);
-
+    printout((void*)meta_log_head_old, meta_log_size); 
+    
     std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_put, fs->s3, key, iov, 3);
     if (S3StatusOK != status.get()){
         printf("PUT FAILED\n");
         throw "put failed";
     }
 
+    // TODO: spawn separate cleaner thread
+    old_log_mutex.lock();
     free(meta_log_head_old);
     free(data_log_head_old);
-    log_mutex.unlock();
+    meta_log_buffer.erase(index);
+    data_log_buffer.erase(index);
+    meta_log_sizes.erase(index);
+    data_log_sizes.erase(index);
+    old_log_mutex.unlock();
+    //log_mutex.unlock();
 }
 
 void fs_sync(void)
@@ -1175,6 +1193,14 @@ int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
         return len;
     }
     log_mutex.unlock();
+    old_log_mutex.lock();
+    if (meta_log_buffer.find(index) != meta_log_buffer.end()) {
+        len = std::min(len, data_log_sizes[index] - offset);
+        memcpy(buf, offset + (char*)data_log_buffer[index], len);
+        old_log_mutex.unlock();
+        return len;
+    }
+    old_log_mutex.unlock();
     size_t n = get_offset(fs, index, false);
     if (n < 0)
         return n;
@@ -1374,11 +1400,11 @@ int fs_write(const char *path, const char *buf, size_t len,
         memcpy(data_log_tail, buf, len);
         data_log_tail = len + (char*)data_log_tail;
     }
-    log_mutex.unlock();
 
     // TODO: optimization - check if it extends the previous record?
     extent e = {.objnum = (uint32_t)this_index,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
+    log_mutex.unlock();
     
     f->lock();
     f->extents.update(offset, e);
@@ -2017,7 +2043,6 @@ void *fs_init(struct fuse_conn_info *conn)
 
     // initialization - FIXME
     log_mutex.lock();
-    printf("INIT\n");
     meta_log_len = 2 * 64 * 1024;
     meta_log_head = meta_log_tail = malloc(meta_log_len*2);
     data_log_len = 2 * 8 * 1024 * 1024;
@@ -2091,6 +2116,19 @@ void fs_teardown(void)
 
     for (auto it = data_offsets.begin(); it != data_offsets.end();
 	 it = data_offsets.erase(it));
+
+    for (auto it = meta_log_buffer.begin(); it != meta_log_buffer.end(); it++) {
+        free(it->second);
+        meta_log_buffer.erase(it);
+    }
+    for (auto it = data_log_buffer.begin(); it != data_log_buffer.end(); it++) {
+        free(it->second);
+        data_log_buffer.erase(it);
+    }
+    for (auto it = meta_log_sizes.begin(); it != meta_log_sizes.end();
+	 it = meta_log_sizes.erase(it));
+    for (auto it = data_log_sizes.begin(); it != data_log_sizes.end();
+	 it = data_log_sizes.erase(it));
 
     next_inode_mutex.lock();
     next_inode = 3;
