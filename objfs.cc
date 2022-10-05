@@ -1100,13 +1100,14 @@ void write_everything_out(struct objfs *fs)
 
     // TODO: spawn separate cleaner thread
     old_log_mutex.lock();
-    free(meta_log_head_old);
-    free(data_log_head_old);
     meta_log_buffer.erase(index);
     data_log_buffer.erase(index);
+    old_log_mutex.unlock();
+    free(meta_log_head_old);
+    free(data_log_head_old);
     meta_log_sizes.erase(index);
     data_log_sizes.erase(index);
-    old_log_mutex.unlock();
+    
 }
 
 void fs_sync(void)
@@ -1121,7 +1122,8 @@ void maybe_write(struct objfs *fs)
     log_mutex.lock();
     if ((meta_offset() > meta_log_len) || (data_offset() > data_log_len)) {
         //printf("OVER THRESHOLD \n");
-	    write_everything_out(fs);
+	    //write_everything_out(fs);
+        std::thread (write_everything_out,fs).detach();
     }
     else {
         log_mutex.unlock();
