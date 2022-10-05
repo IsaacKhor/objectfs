@@ -71,6 +71,7 @@ class fuse_context(Structure):
                 ]
 
 null_fi = fuse_file_info()
+null_fi.fh = c_longlong(0)
 
 dir = os.getcwd()
 lib = CDLL(dir + "/libobjfs.so")
@@ -126,7 +127,7 @@ def create(path, mode):
     return retval
 
 def mkdir(path, mode):
-    print('mkdir path:', path)
+    #print('mkdir path:', path)
     retval = lib.py_mkdir(xbytes(path), c_int(mode))
     if segfaulted():
         raise AssertionError(stacktrace())
@@ -184,6 +185,9 @@ def write(path, data, offset):
     if segfaulted():
         raise AssertionError(stacktrace())
     return val
+
+def set_context(bucket, access_key, secret_key, host, size):
+    lib.set_objectfs_context(xbytes(bucket), xbytes(access_key), xbytes(secret_key), xbytes(host), c_int(size))
 
 def sync():
     lib.py_sync()

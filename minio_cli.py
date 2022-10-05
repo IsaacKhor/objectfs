@@ -12,13 +12,9 @@ GB = 1024 ** 3
 config = TransferConfig(multipart_threshold=5 * GB, max_concurrency=10, use_threads=True)
 
 bucket = s3.Bucket('songs')
-started = False
 for bucket_object in bucket.objects.all():
-    if started:
+    if bucket_object.key != 'prefix1.00000000':
         bucket_object.delete()
-        continue
-    if bucket_object.key == 'prefix1.00000000':
-        started = True
     
 
 bucket = s3.Bucket('songs')

@@ -99,7 +99,7 @@ class tests(unittest.TestCase):
                 self.assertOK(v, 'readdir %s' % path)
                 self.assertEqual(len(des), 0,
                                     msg='readdir %s: %d results (should be 0)' % (path, len(des)))
-    
+
     def do_write(self, path, filesz, opsz):
         v = obj.create(path, 0o777)
         self.assertOK(v, 'create %s' % path)

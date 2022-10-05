@@ -61,6 +61,7 @@
 std::shared_mutex inode_mutex;
 std::mutex log_mutex;
 std::mutex old_log_mutex;
+std::mutex logger_mutex;
 
 std::atomic<int> next_inode (3); // the root "" has inum 2
 std::mutex next_inode_mutex;
@@ -487,6 +488,32 @@ size_t fs_link::serialize(std::ostream &s)
     s.write(target.c_str(), target.length());
     return bytes;
 }
+
+class Logger {
+    std::string log_path;
+    std::fstream file_stream;
+
+public:
+    Logger(std::string path);
+    ~Logger();
+    void log(std::string info);
+};
+
+
+Logger::Logger(std::string path){
+    file_stream.open(path);
+}
+
+Logger::~Logger(void){
+    file_stream.close();
+}
+
+void Logger::log(std::string info) {
+    const std::unique_lock<std::mutex> lock(logger_mutex);
+    file_stream << info;
+}
+
+Logger* logger = new Logger("/mnt/ramdisk/log_deferred_commit.txt");
 
 
 /****************
@@ -1056,6 +1083,8 @@ void printout(void *hdr, int hdrlen)
 
 void write_everything_out(struct objfs *fs)
 {
+    auto t0 = std::chrono::system_clock::now();
+
     int index = this_index;
     size_t meta_log_size = meta_offset();
     void *meta_log_head_old = meta_log_head;
@@ -1084,6 +1113,9 @@ void write_everything_out(struct objfs *fs)
     this_index++;
     log_mutex.unlock();
 
+    auto t1 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff1 = t1 - t0;
+
     struct iovec iov[3] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
 			   {.iov_base = meta_log_head_old, .iov_len = meta_log_size},
 			   {.iov_base = data_log_head_old, .iov_len = data_log_size}};
@@ -1093,20 +1125,35 @@ void write_everything_out(struct objfs *fs)
     printout((void*)meta_log_head_old, meta_log_size); 
     
     std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_put, fs->s3, key, iov, 3);
+    //std::future<S3Status> status = std::async(std::launch::async, &s3_target::s3_put, fs->s3, key, iov, 3);
+    
     if (S3StatusOK != status.get()){
+    //if (S3StatusOK != fs->s3->s3_put(key, iov, 3)) {
         printf("PUT FAILED\n");
         throw "put failed";
     }
+    t0 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff2 = t0 - t1;
 
     // TODO: spawn separate cleaner thread
     old_log_mutex.lock();
-    free(meta_log_head_old);
-    free(data_log_head_old);
     meta_log_buffer.erase(index);
     data_log_buffer.erase(index);
+    old_log_mutex.unlock();
+    free(meta_log_head_old);
+    free(data_log_head_old);
     meta_log_sizes.erase(index);
     data_log_sizes.erase(index);
-    old_log_mutex.unlock();
+
+    t1 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff3 = t1 - t0;
+
+    std::string info = "W1|Time: " + std::to_string(diff1.count()) + "\n";
+    logger->log(info);
+    info = "W2|Time: " + std::to_string(diff2.count()) + "\n";
+    logger->log(info);
+    info = "W3|Time: " + std::to_string(diff3.count()) + "\n";
+    logger->log(info);
 }
 
 void fs_sync(void)
@@ -1118,14 +1165,28 @@ void fs_sync(void)
 
 void maybe_write(struct objfs *fs)
 {
+    auto t0 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff1 = t0 - t0;
+    std::chrono::duration<double> diff2 = t0 - t0;
     log_mutex.lock();
     if ((meta_offset() > meta_log_len) || (data_offset() > data_log_len)) {
-        //printf("OVER THRESHOLD \n");
-	    write_everything_out(fs);
+        auto t1 = std::chrono::system_clock::now();
+        diff1 = t1 - t0;
+        //std::async(std::launch::deferred, write_everything_out, fs);
+        
+        // TODO: maybe a thread pool?
+        std::thread (write_everything_out,fs).detach();
+        t0 = std::chrono::system_clock::now();
+        diff2 = t0 - t1;
+	    //write_everything_out(fs);
     }
     else {
         log_mutex.unlock();
     }
+    std::string info = "M1|Time: " + std::to_string(diff1.count()) + "\n";
+    logger->log(info);
+    info = "M2|Time: " + std::to_string(diff2.count()) + "\n";
+    logger->log(info);
 }
 
 void make_record(const void *hdr, size_t hdrlen,
@@ -1360,6 +1421,7 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
 {
+    auto t0 = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum;
@@ -1371,6 +1433,8 @@ int fs_write(const char *path, const char *buf, size_t len,
     if (inum < 0){
         return inum;
     }
+    auto t1 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff1 = t1 - t0;
 
     inode_mutex.lock_shared();
     fs_obj *obj = inode_map[inum];
@@ -1384,6 +1448,8 @@ int fs_write(const char *path, const char *buf, size_t len,
     f->read_lock();
     off_t new_size = std::max((off_t)(offset+len), (off_t)(f->size));
     f->read_unlock();
+    t0 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff2 = t0 - t1;
 
     int hdr_bytes = sizeof(log_record) + sizeof(log_data);
     char hdr[hdr_bytes];
@@ -1392,6 +1458,9 @@ int fs_write(const char *path, const char *buf, size_t len,
 
     lr->type = LOG_DATA;
     lr->len = sizeof(log_data);
+
+    t1 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff3 = t1 - t0;
 
     log_mutex.lock();
     size_t obj_offset = data_offset();
@@ -1416,15 +1485,36 @@ int fs_write(const char *path, const char *buf, size_t len,
     extent e = {.objnum = (uint32_t)this_index,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
     log_mutex.unlock();
-    
+    t0 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff4 = t0 - t1;
     f->write_lock();
     f->extents.update(offset, e);
     f->write_unlock();
+    t1 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff5 = t1 - t0;
     //dirty_inodes.insert(f);
     write_inode(f);
-    
+    t0 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff6 = t0 - t1;
     maybe_write(fs);
+
+    t1 = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff7 = t1 - t0;
     
+    std::string info = "T1|Time: " + std::to_string(diff1.count()) + ", Path: " + path + "\n";
+    logger->log(info);
+    info = "T2|Time: " + std::to_string(diff2.count()) + ", Path: " + path + "\n";
+    logger->log(info);
+    info = "T3|Time: " + std::to_string(diff3.count()) + ", Path: " + path + "\n";
+    logger->log(info);
+    info = "T4|Time: " + std::to_string(diff4.count()) + ", Path: " + path + "\n";
+    logger->log(info);
+    info = "T5|Time: " + std::to_string(diff5.count()) + ", Path: " + path + "\n";
+    logger->log(info);
+    info = "T6|Time: " + std::to_string(diff6.count()) + ", Path: " + path + "\n";
+    logger->log(info);
+    info = "T7|Time: " + std::to_string(diff7.count()) + ", Path: " + path + "\n";
+    logger->log(info);
     return len;
 }
 

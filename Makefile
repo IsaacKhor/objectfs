@@ -10,7 +10,7 @@ iov.o: iov.c iov.h
 	gcc -O -c iov.c -fPIC
 
 libobjfs.so: s3wrap.o iov.o objfs.o libobjfs.o
-	gcc -g $^ -o $@ -g -Wall -shared -fPIC -lstdc++ -ls3 -Llibs3/build/lib
+	gcc -g $^ -o $@ -g -Wall -shared -fPIC -lstdc++ -ls3 -Llibs3/build/lib -lfuse
 
 objfs-mount: objfs-mount.o objfs.o s3wrap.o iov.o
 	g++ -g $^ -o $@ -lfuse -ls3 -lcurl -lcrypto -lxml2 -Llibs3/build/lib -L/lib/x86_64-linux-gnu -pthread

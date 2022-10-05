@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <fuse.h>
+//#include <fuse_opt.h>
 #include <string.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -111,8 +112,8 @@ int py_readdir(const char *path, int *n, struct dirent *de,
     set_handler();
     if (setjmp(bail_buf) == 0) {
         struct dir_state ds = {.max = *n, .i = 0, .de = de};
-        //val = fs_readdir(path, &ds, filler, 0, fi);
-	val = fs_ops.readdir(path, &ds, filler, 0, fi);
+        fi->fh = 0;
+        val = fs_ops.readdir(path, &ds, filler, 0, fi);
         *n = ds.i;
     }
     unset_handler();
@@ -124,8 +125,8 @@ int py_create(const char *path, unsigned int mode, struct fuse_file_info *fi)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val = fs_create(path, mode, fi);
-	val = fs_ops.create(path, mode, fi);
+        fi->fh = 0;
+	    val = fs_ops.create(path, mode, fi);
     }
     unset_handler();
     return val;
@@ -136,8 +137,7 @@ int py_mkdir(const char *path, unsigned int mode)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val = fs_mkdir(path, mode);
-	val = fs_ops.mkdir(path, mode);
+	    val = fs_ops.mkdir(path, mode);
     }
     unset_handler();
     return val;
@@ -220,7 +220,7 @@ int py_read(const char *path, char *buf, unsigned int len, unsigned int offset,
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val = fs_read(path, buf, len, offset, fi);
+        fi->fh = 0;
         val = fs_ops.read(path, buf, len, offset, fi);
     }
     unset_handler();
@@ -233,7 +233,7 @@ int py_write(const char *path, const char *buf, unsigned int  len,
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val = fs_write(path, buf, len, offset, fi);
+        fi->fh = 0;
         val = fs_ops.write(path, buf, len, offset, fi);
 
     }
@@ -271,14 +271,33 @@ char prefix_arr[] = "                    ";
 char *prefix = prefix_arr;
 int py_init(const char *_prefix)
 {
+    /*
+    char **argv = malloc(5*sizeof(char *)run
+    argv[0] = "/root/git/objectfs/objfs-mount";
+    argv[1] = "-odefault_permissions";
+    argv[2] = "-oallow_other";
+    argv[3] = "-d";
+    argv[4] = "/local0/mount1";
+    int argc = 5;
+    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    args.allocated = 1;
+    
+    struct objfs fs = { .bucket = bucket, .prefix = _prefix,
+        .host = "10.255.23.109:9000", .access = "minio", .secret = "miniostorage",
+        .use_local = 0, .chunk_size = 1*1024*1024};
+
+    fuse_main(args.argc, args.argv, &fs_ops, &fs);*/
+
+
     //char *prefix = (char*) malloc(sizeof(char) * 100);
-    struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
+    //struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
 
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) { 
         //val = fs_initialize(prefix);
-        prefix = (char *)_prefix;
+        //prefix = (char *)_prefix;
+        
         fs_ops.init(NULL);
 
     }
