@@ -61,7 +61,6 @@
 std::shared_mutex inode_mutex;
 std::mutex log_mutex;
 std::shared_mutex old_log_mutex;
-std::mutex logger_mutex;
 
 std::atomic<int> next_inode (3); // the root "" has inum 2
 std::mutex next_inode_mutex;
@@ -70,9 +69,6 @@ std::map<int, void *> data_log_buffer; // keys are object indices, values are ob
 std::map<int, size_t> meta_log_sizes; 
 std::map<int, size_t> data_log_sizes;
 std::map<int, void *> written_inodes;
-
-int write_inode_counter = 0;
-int overwrite_inode_counter = 0;
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -283,7 +279,7 @@ struct extent_xp {
 };
     
 class fs_file : public fs_obj {
-    std::shared_mutex   mtx;
+    std::shared_mutex   mtx;  // Read-Write Lock
 public:
     extmap  extents;
     size_t length(void);
@@ -291,19 +287,15 @@ public:
     fs_file(void *ptr, size_t len);
     fs_file(){};
     void write_lock(){
-        //printf("file write locked\n");
         mtx.lock();
     }
     void write_unlock(){
-        //printf("file write unlocked\n");
         mtx.unlock();
     }
     void read_lock(){
-        //printf("file read locked\n");
         mtx.lock_shared();
     }
     void read_unlock(){
-        //printf("file read unlocked\n");
         mtx.unlock_shared();
     }
 };
@@ -377,7 +369,7 @@ struct dirent_xp {
 } __attribute__((packed,aligned(1)));
 
 class fs_directory : public fs_obj {
-    std::shared_mutex   mtx;
+    std::shared_mutex   mtx;  // Read-Write Lock
 public:
     std::map<std::string,uint32_t> dirents;
     size_t length(void);
@@ -385,19 +377,15 @@ public:
     fs_directory(void *ptr, size_t len);
     fs_directory(){};
     void write_lock(){
-        //printf("dir write locked\n");
         mtx.lock();
     };
     void write_unlock(){
-        //printf("dir write unlocked\n");
         mtx.unlock();
     };
     void read_lock(){
-        //printf("dir read locked\n");
         mtx.lock_shared();
     };
     void read_unlock(){
-        //printf("dir read unlocked\n");
         mtx.unlock_shared();
     };
 };
@@ -492,33 +480,6 @@ size_t fs_link::serialize(std::ostream &s)
     s.write(target.c_str(), target.length());
     return bytes;
 }
-
-class Logger {
-    std::string log_path;
-    std::fstream file_stream;
-
-public:
-    Logger(std::string path);
-    ~Logger();
-    void log(std::string info);
-};
-
-
-Logger::Logger(std::string path){
-    file_stream.open(path);
-}
-
-Logger::~Logger(void){
-    file_stream.close();
-}
-
-void Logger::log(std::string info) {
-    const std::unique_lock<std::mutex> lock(logger_mutex);
-    file_stream << info;
-}
-
-Logger* logger = new Logger("/mnt/ramdisk/log_deferred_commit.txt");
-
 
 /****************
  * file header format
@@ -701,7 +662,6 @@ static int read_log_inode(log_inode *in)
             fs_directory *d = new fs_directory;
             d->type = OBJ_DIR;
             d->size = 0;
-            //inode_map[in->inum] = d;
             inode_mutex.unlock_shared();
             set_inode_map(in->inum, d);
             update_inode(d, in);
@@ -712,7 +672,6 @@ static int read_log_inode(log_inode *in)
             f->size = 0;
             inode_mutex.unlock_shared();
             update_inode(f, in);
-            //inode_map[in->inum] = f;
             set_inode_map(in->inum, f);
         }
         else if (S_ISLNK(in->mode)) {
@@ -721,7 +680,6 @@ static int read_log_inode(log_inode *in)
             s->size = 0;
             inode_mutex.unlock_shared();
             update_inode(s, in);
-            //inode_map[in->inum] = s;
             set_inode_map(in->inum, s);
         }
         else {
@@ -730,7 +688,6 @@ static int read_log_inode(log_inode *in)
             o->size = 0;
             inode_mutex.unlock_shared();
             update_inode(o, in);
-            //inode_map[in->inum] = o;
             set_inode_map(in->inum, o);
         }
     }
@@ -1061,8 +1018,6 @@ size_t meta_offset(void)
 {
     return (char*)meta_log_tail - (char*)meta_log_head;
 }
-    
-//std::set<fs_obj*> dirty_inodes;
 
 void write_inode(fs_obj *f);
 
@@ -1085,10 +1040,11 @@ void printout(void *hdr, int hdrlen)
     printf("\n");
 }
 
+// write_everything_out allocates a new metadata log and a new data log.
+// It puts old logs in the buffer so that read threads can get them before they are committed to 
+// S3 backend. After s3_put returns success, old logs are removed from buffer
 void write_everything_out(struct objfs *fs)
 {
-    auto t0 = std::chrono::system_clock::now();
-
     int index = this_index;
     size_t meta_log_size = meta_offset();
     void *meta_log_head_old = meta_log_head;
@@ -1118,9 +1074,6 @@ void write_everything_out(struct objfs *fs)
     written_inodes.clear();
     log_mutex.unlock();
 
-    auto t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff1 = t1 - t0;
-
     struct iovec iov[3] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
 			   {.iov_base = meta_log_head_old, .iov_len = meta_log_size},
 			   {.iov_base = data_log_head_old, .iov_len = data_log_size}};
@@ -1130,15 +1083,11 @@ void write_everything_out(struct objfs *fs)
     printout((void*)meta_log_head_old, meta_log_size); 
     
     std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_put, fs->s3, key, iov, 3);
-    //std::future<S3Status> status = std::async(std::launch::async, &s3_target::s3_put, fs->s3, key, iov, 3);
     
     if (S3StatusOK != status.get()){
-    //if (S3StatusOK != fs->s3->s3_put(key, iov, 3)) {
         printf("PUT FAILED\n");
         throw "put failed";
     }
-    t0 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff2 = t0 - t1;
 
     // TODO: spawn separate cleaner thread
     old_log_mutex.lock();
@@ -1149,16 +1098,6 @@ void write_everything_out(struct objfs *fs)
     free(data_log_head_old);
     meta_log_sizes.erase(index);
     data_log_sizes.erase(index);
-
-    t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff3 = t1 - t0;
-
-    std::string info = "W1|Time: " + std::to_string(diff1.count()) + "\n";
-    logger->log(info);
-    info = "W2|Time: " + std::to_string(diff2.count()) + "\n";
-    logger->log(info);
-    info = "W3|Time: " + std::to_string(diff3.count()) + "\n";
-    logger->log(info);
 }
 
 void fs_sync(void)
@@ -1170,28 +1109,14 @@ void fs_sync(void)
 
 void maybe_write(struct objfs *fs)
 {
-    auto t0 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff1 = t0 - t0;
-    std::chrono::duration<double> diff2 = t0 - t0;
     log_mutex.lock();
-    if ((meta_offset() > meta_log_len) || (data_offset() > data_log_len)) {
-        auto t1 = std::chrono::system_clock::now();
-        diff1 = t1 - t0;
-        //std::async(std::launch::deferred, write_everything_out, fs);
-        
+    if ((meta_offset() > meta_log_len) || (data_offset() > data_log_len)) {    
         // TODO: maybe a thread pool?
         std::thread (write_everything_out,fs).detach();
-        t0 = std::chrono::system_clock::now();
-        diff2 = t0 - t1;
-	    //write_everything_out(fs);
     }
     else {
         log_mutex.unlock();
     }
-    std::string info = "M1|Time: " + std::to_string(diff1.count()) + "\n";
-    logger->log(info);
-    info = "M2|Time: " + std::to_string(diff2.count()) + "\n";
-    logger->log(info);
 }
 
 void make_record(const void *hdr, size_t hdrlen,
@@ -1426,7 +1351,6 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
 {
-    auto t0 = std::chrono::system_clock::now();
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     int inum;
@@ -1438,8 +1362,6 @@ int fs_write(const char *path, const char *buf, size_t len,
     if (inum < 0){
         return inum;
     }
-    auto t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff1 = t1 - t0;
 
     inode_mutex.lock_shared();
     fs_obj *obj = inode_map[inum];
@@ -1453,8 +1375,6 @@ int fs_write(const char *path, const char *buf, size_t len,
     f->read_lock();
     off_t new_size = std::max((off_t)(offset+len), (off_t)(f->size));
     f->read_unlock();
-    t0 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff2 = t0 - t1;
 
     int hdr_bytes = sizeof(log_record) + sizeof(log_data);
     char hdr[hdr_bytes];
@@ -1464,12 +1384,8 @@ int fs_write(const char *path, const char *buf, size_t len,
     lr->type = LOG_DATA;
     lr->len = sizeof(log_data);
 
-    t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff3 = t1 - t0;
-
     log_mutex.lock();
     size_t obj_offset = data_offset();
-    //log_mutex.unlock();
 
     *ld = (log_data) { .inum = (uint32_t)inum,
 		       .obj_offset = (uint32_t)obj_offset,
@@ -1477,8 +1393,6 @@ int fs_write(const char *path, const char *buf, size_t len,
 		       .size = (int64_t)new_size,
 		       .len = (uint32_t)len };
 
-
-    //make_record((void*)hdr, hdr_bytes, buf, len);
     memcpy(meta_log_tail, hdr, hdr_bytes);
     meta_log_tail = hdr_bytes + (char*)meta_log_tail;
     if (len > 0) {
@@ -1490,39 +1404,20 @@ int fs_write(const char *path, const char *buf, size_t len,
     extent e = {.objnum = (uint32_t)this_index,
 		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
     log_mutex.unlock();
-    t0 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff4 = t0 - t1;
+
     f->write_lock();
     f->extents.update(offset, e);
     f->write_unlock();
-    t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff5 = t1 - t0;
-    //dirty_inodes.insert(f);
+
     write_inode(f);
-    t0 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff6 = t0 - t1;
     maybe_write(fs);
 
-    t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff7 = t1 - t0;
-    
-    std::string info = "T1|Time: " + std::to_string(diff1.count()) + ", Path: " + path + "\n";
-    logger->log(info);
-    info = "T2|Time: " + std::to_string(diff2.count()) + ", Path: " + path + "\n";
-    logger->log(info);
-    info = "T3|Time: " + std::to_string(diff3.count()) + ", Path: " + path + "\n";
-    logger->log(info);
-    info = "T4|Time: " + std::to_string(diff4.count()) + ", Path: " + path + "\n";
-    logger->log(info);
-    info = "T5|Time: " + std::to_string(diff5.count()) + ", Path: " + path + "\n";
-    logger->log(info);
-    info = "T6|Time: " + std::to_string(diff6.count()) + ", Path: " + path + "\n";
-    logger->log(info);
-    info = "T7|Time: " + std::to_string(diff7.count()) + ", Path: " + path + "\n";
-    logger->log(info);
     return len;
 }
 
+// write_inode stores written inodes in a buffer "written_inodes"
+// future writes of the same inode overwrites the previous log_record
+// The buffer resets at write_everything_out when the log is committed to S3
 void write_inode(fs_obj *f)
 {
     size_t len = sizeof(log_record) + sizeof(log_inode);
@@ -1543,19 +1438,12 @@ void write_inode(fs_obj *f)
     if (written_inodes.find(in->inum) != written_inodes.end()){
         const std::unique_lock<std::mutex> lock(log_mutex);
         memcpy(written_inodes[in->inum], rec, len);
-        overwrite_inode_counter++;
-        std::string st = "OVERWRITE: " + std::to_string(overwrite_inode_counter) + "\n";
-        logger->log(st);
     } 
     else {
         const std::unique_lock<std::mutex> lock(log_mutex);
         memcpy(meta_log_tail, rec, len);
         written_inodes[in->inum] = meta_log_tail;
         meta_log_tail = len + (char*)meta_log_tail;
-        write_inode_counter++;
-        std::string st = "REGULAR WRITE: " + std::to_string(write_inode_counter) + "\n";
-        logger->log(st);
-        //make_record(rec, len, NULL, 0);
     }
 }
 
@@ -1595,7 +1483,6 @@ int fs_mkdir(const char *path, mode_t mode)
     if (parent->type != OBJ_DIR){
         return -ENOTDIR;
     }
-    //printf("PARENT VALID %s\n", path);
     
     next_inode_mutex.lock();
     inum = next_inode++;
@@ -1611,13 +1498,12 @@ int fs_mkdir(const char *path, mode_t mode)
     dir->uid = ctx->uid;
     dir->gid = ctx->gid;
     
-    //printf("SET Inum: %d\n", inum);
     set_inode_map(inum, dir);
     parent->write_lock();
     parent->dirents[leaf] = inum;
     parent->write_unlock();
     clock_gettime(CLOCK_REALTIME, &parent->mtime);
-    //dirty_inodes.insert(parent);
+
     write_inode(parent);
     
     write_inode(dir);	// can't rely on dirty_inodes
@@ -1679,7 +1565,6 @@ int fs_rmdir(const char *path)
     delete dir;
     
     clock_gettime(CLOCK_REALTIME, &parent->mtime);
-    //dirty_inodes.insert(parent);
     write_inode(parent);
     do_log_delete(parent_inum, inum, leaf);
     maybe_write(fs);
@@ -1717,7 +1602,6 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
     f->uid = ctx->uid;
     f->gid = ctx->gid;
     
-    //inode_map[inum] = f;
     set_inode_map(inum, f);
     dir->write_lock();
     dir->dirents[leaf] = inum;
@@ -1727,7 +1611,6 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
     write_dirent(parent_inum, leaf, inum);
     
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
-    //dirty_inodes.insert(dir);
     write_inode(dir);
 
     maybe_write(fs);
@@ -1803,7 +1686,6 @@ int fs_truncate(const char *path, off_t len)
     do_log_trunc(inum, len);
 
     clock_gettime(CLOCK_REALTIME, &f->mtime);
-    //dirty_inodes.insert(f);
     write_inode(f);
     maybe_write(fs);
     return 0;
@@ -1834,7 +1716,6 @@ int fs_unlink(const char *path)
     dir->dirents.erase(leaf);
     dir->write_unlock();
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
-    //dirty_inodes.insert(dir);
     write_inode(dir);
     
     if (obj->type == OBJ_FILE) {
@@ -1900,14 +1781,12 @@ int fs_rename(const char *src_path, const char *dst_path)
     srcdir->dirents.erase(src_leaf);
     srcdir->write_unlock();
     clock_gettime(CLOCK_REALTIME, &srcdir->mtime);
-    //dirty_inodes.insert(srcdir);
     write_inode(srcdir);
 
     dstdir->write_lock();
     dstdir->dirents[dst_leaf] = src_inum;
     dstdir->write_unlock();
     clock_gettime(CLOCK_REALTIME, &dstdir->mtime);
-    //dirty_inodes.insert(dstdir);
     write_inode(dstdir);
     
     do_log_rename(src_inum, src_parent, dst_parent, src_leaf, dst_leaf);
@@ -1928,7 +1807,6 @@ int fs_chmod(const char *path, mode_t mode)
     fs_obj *obj = inode_map[inum];
     inode_mutex.unlock_shared();
     obj->mode = mode | (S_IFMT & obj->mode);
-    //dirty_inodes.insert(obj);
     write_inode(obj);
     maybe_write(fs);
     return 0;
@@ -1952,7 +1830,6 @@ int fs_utimens(const char *path, const struct timespec tv[2])
 	    clock_gettime(CLOCK_REALTIME, &obj->mtime);
     else if (tv[1].tv_nsec != UTIME_OMIT)
 	    obj->mtime = tv[1];
-    //dirty_inodes.insert(obj);
     write_inode(obj);
     maybe_write(fs);
     
@@ -2088,7 +1965,6 @@ int fs_symlink(const char *path, const char *contents)
     clock_gettime(CLOCK_REALTIME, &l->mtime);
 
     l->target = leaf;
-    //inode_map[inum] = l;
     set_inode_map(inum, l);
     dir->write_lock();
     dir->dirents[leaf] = l->inum;
@@ -2099,7 +1975,6 @@ int fs_symlink(const char *path, const char *contents)
     write_dirent(parent_inum, leaf, inum);
     
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
-    ///dirty_inodes.insert(dir);
     write_inode(dir);
     maybe_write(fs);
     return 0;
