@@ -1,5 +1,23 @@
 # objectfs
 
+## How to build
+
+In subdirectory libs3, run:
+```
+$ make install
+```
+Return to project directory, run:
+```
+$ make all
+```
+
+## How to run
+In project directory, set s3 credentials in s3.config, then run:
+```
+$ ./objfs-mount -d <s3_bucket>/<s3_prefix> <local_mount_dir>
+```
+
+
 ## things that need to get fixed
 
 ### multi-threading

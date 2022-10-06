@@ -64,13 +64,36 @@ int main(int argc, char **argv)
      */
     fuse_opt_insert_arg(&args, 1, "-oallow_other");
     fuse_opt_insert_arg(&args, 1, "-odefault_permissions");
-//    fuse_opt_insert_arg(&args, 1, "-okernel_cache");
-//    fuse_opt_insert_arg(&args, 1, "-oentry_timeout=1000,attr_timeout=1000");
+
+    // Parse host, access key and secret key from config file
+    FILE *fp = fopen("s3.config", "r");
+    char line[256];
+    
+    fgets(line, sizeof(line), fp);
+    char host[251];
+    strncpy(host, &line[5], strlen(line));
+    host[strlen(host)-1] = '\0';
+    printf("host: %s", host); 
+
+
+    fgets(line, sizeof(line), fp);
+    char access[251];
+    strncpy(access, &line[14], strlen(line));
+    access[strlen(access)-1] = '\0';
+    printf("access: %s", access); 
+
+    fgets(line, sizeof(line), fp);
+    char secret[251];
+    strncpy(secret, &line[14], strlen(line));
+    secret[strlen(secret)-1] = '\0';
+    printf("secret: %s", secret); 
+
+
+    fclose(fp);
+
 
     struct objfs fs = { .bucket = bucket, .prefix = prefix,
-        .host = "10.255.23.109:9000", .access = "minio", .secret = "miniostorage",
-        //.host = "192.168.32.101:8080", .access = "FK31TLLZXJ0UHLG9PR0K", .secret = "KGuwIt2AnNay3tsYLWz2iV7STRCA7Kbr8MV5ex0I",
-        //.host = getenv("S3_HOSTNAME"), .access = getenv("S3_ACCESS_KEY_ID"), .secret = getenv("S3_SECRET_ACCESS_KEY"), 
+        .host = host, .access = access, .secret = secret,
         .use_local = 0, .chunk_size = size};
 
     /* TODO: run using low-level FUSE interface
