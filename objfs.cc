@@ -60,7 +60,7 @@
 
 std::shared_mutex inode_mutex;
 std::mutex log_mutex;
-std::mutex old_log_mutex;
+std::shared_mutex old_log_mutex;
 std::mutex logger_mutex;
 
 std::atomic<int> next_inode (3); // the root "" has inum 2
@@ -69,6 +69,10 @@ std::map<int, void *> meta_log_buffer; // Before a log object is commited to bac
 std::map<int, void *> data_log_buffer; // keys are object indices, values are objects
 std::map<int, size_t> meta_log_sizes; 
 std::map<int, size_t> data_log_sizes;
+std::map<int, void *> written_inodes;
+
+int write_inode_counter = 0;
+int overwrite_inode_counter = 0;
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -1111,6 +1115,7 @@ void write_everything_out(struct objfs *fs)
         .this_index = this_index,
     };
     this_index++;
+    written_inodes.clear();
     log_mutex.unlock();
 
     auto t1 = std::chrono::system_clock::now();
@@ -1194,7 +1199,7 @@ void make_record(const void *hdr, size_t hdrlen,
 {
     printout((void*)hdr, hdrlen);
     
-    const std::lock_guard<std::mutex> lock(log_mutex);
+    const std::unique_lock<std::mutex> lock(log_mutex);
     memcpy(meta_log_tail, hdr, hdrlen);
     meta_log_tail = hdrlen + (char*)meta_log_tail;
     if (datalen > 0) {
@@ -1265,14 +1270,14 @@ int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
         return len;
     }
     log_mutex.unlock();
-    old_log_mutex.lock();
+    old_log_mutex.lock_shared();
     if (meta_log_buffer.find(index) != meta_log_buffer.end()) {
         len = std::min(len, data_log_sizes[index] - offset);
         memcpy(buf, offset + (char*)data_log_buffer[index], len);
-        old_log_mutex.unlock();
+        old_log_mutex.unlock_shared();
         return len;
     }
-    old_log_mutex.unlock();
+    old_log_mutex.unlock_shared();
     size_t n = get_offset(fs, index, false);
     if (n < 0)
         return n;
@@ -1535,7 +1540,23 @@ void write_inode(fs_obj *f)
     in->rdev = f->rdev;
     in->mtime = f->mtime;
 
-    make_record(rec, len, NULL, 0);
+    if (written_inodes.find(in->inum) != written_inodes.end()){
+        const std::unique_lock<std::mutex> lock(log_mutex);
+        memcpy(written_inodes[in->inum], rec, len);
+        overwrite_inode_counter++;
+        std::string st = "OVERWRITE: " + std::to_string(overwrite_inode_counter) + "\n";
+        logger->log(st);
+    } 
+    else {
+        const std::unique_lock<std::mutex> lock(log_mutex);
+        memcpy(meta_log_tail, rec, len);
+        written_inodes[in->inum] = meta_log_tail;
+        meta_log_tail = len + (char*)meta_log_tail;
+        write_inode_counter++;
+        std::string st = "REGULAR WRITE: " + std::to_string(write_inode_counter) + "\n";
+        logger->log(st);
+        //make_record(rec, len, NULL, 0);
+    }
 }
 
 void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
@@ -2140,12 +2161,12 @@ void *fs_init(struct fuse_conn_info *conn)
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
 
     // initialization - FIXME
-    log_mutex.lock();
+    //log_mutex.lock();
     meta_log_len = 2 * 64 * 1024;
     meta_log_head = meta_log_tail = malloc(meta_log_len*2);
     data_log_len = 2 * 8 * 1024 * 1024;
     data_log_head = data_log_tail = malloc(data_log_len*2);//);  // TODO: what length?
-    log_mutex.unlock();
+    //log_mutex.unlock();
 
     fs->s3 = new s3_target(fs->host, fs->bucket, fs->access, fs->secret, false);
 
@@ -2200,17 +2221,14 @@ void fs_teardown(void)
 	 it = inode_map.erase(it)) ;
     inode_mutex.unlock();
     
-    //log_mutex.lock();
     this_index = 0;
-    //log_mutex.unlock();
 
-    /*for (auto it = dirty_inodes.begin(); it != dirty_inodes.end();
-	 it = dirty_inodes.erase(it));*/
+    written_inodes.clear();
     
-    log_mutex.lock();
+    //log_mutex.lock();
     free(meta_log_head);
     free(data_log_head);
-    log_mutex.unlock();
+    //log_mutex.unlock();
 
     for (auto it = data_offsets.begin(); it != data_offsets.end();
 	 it = data_offsets.erase(it));
