@@ -46,6 +46,7 @@
 #include <atomic>
 #include <future>
 #include <shared_mutex>
+#include <condition_variable>
 
 #include <sys/uio.h>
 #include <list>
@@ -61,8 +62,14 @@
 std::shared_mutex inode_mutex;
 std::mutex log_mutex;
 std::shared_mutex old_log_mutex;
+std::condition_variable cv;
+std::mutex cv_m;
+std::mutex logger_mutex;
+bool quit_ckpt;
 
 std::atomic<int> next_inode (3); // the root "" has inum 2
+std::atomic<int> ckpt_index (-1); // record the latest checkpoint object index
+//std::atomic<int> log_record_index (0); 
 std::mutex next_inode_mutex;
 std::map<int, void *> meta_log_buffer; // Before a log object is commited to back end, it sits here for read requests
 std::map<int, void *> data_log_buffer; // keys are object indices, values are objects
@@ -481,6 +488,32 @@ size_t fs_link::serialize(std::ostream &s)
     return bytes;
 }
 
+class Logger {
+    std::string log_path;
+    std::fstream file_stream;
+
+public:
+    Logger(std::string path);
+    ~Logger();
+    void log(std::string info);
+};
+
+
+Logger::Logger(std::string path){
+    file_stream.open(path);
+}
+
+Logger::~Logger(void){
+    file_stream.close();
+}
+
+void Logger::log(std::string info) {
+    const std::unique_lock<std::mutex> lock(logger_mutex);
+    file_stream << info;
+}
+
+Logger* logger = new Logger("/mnt/ramdisk/log_ckpt.txt");
+
 /****************
  * file header format
  */
@@ -564,6 +597,7 @@ enum log_rec_type {
 struct log_record {
     uint16_t type : 4;
     uint16_t len : 12;
+    int32_t index;
     char data[];
 } __attribute__((packed,aligned(1)));
 
@@ -576,6 +610,7 @@ struct obj_header {
     int32_t type;		// 1 == data, 2 == metadata
     int32_t hdr_len;
     int32_t this_index;
+    int32_t ckpt_index; // the object index of the latest checkpoint
     char    data[];
 };
 
@@ -939,6 +974,10 @@ size_t serialize_itable(std::ostream &s,
     return bytes;
 }
 
+/*void deserialize_itable(void *buf){
+
+}*/
+
 /* checkpoint has fields:
  * .. same obj header w/ type=2 ..
  * root inode #, offset, len
@@ -961,36 +1000,11 @@ struct ckpt_header  {
     uint32_t root_len;
     uint32_t next_inum;
     uint32_t itable_offset;
-    /* itable_len is implicit */
+    uint32_t itable_len;
+    uint32_t next_s3_index;
+    //uint32_t next_offset;
     char     data[];
 };
-
-void serialize_all(void)
-{
-    int root_inum = 1;
-    next_inode_mutex.lock();
-    ckpt_header h = {.root_inum = (uint32_t)root_inum,
-		     .next_inum = (uint32_t)next_inode};
-    next_inode_mutex.unlock();
-    std::stringstream objs;
-    std::stringstream itable;
-    std::map<uint32_t,offset_len> imap;
-    size_t objs_offset = sizeof(h);
-    
-    size_t itable_offset = serialize_tree(objs, objs_offset, root_inum, imap);
-
-    auto [_off,_len] = imap[root_inum];
-    h.root_offset = _off;
-    h.root_len = _len;
-    h.itable_offset = itable_offset;
-
-    size_t itable_len = serialize_itable(itable, imap);
-
-    // checkpoint is now in three parts:
-    // &h, sizeof(h)
-    // objs.str().c_str(), itable_offset-objs_offset
-    // itable.str().c_str(), itable_len
-}
 
 
 /* 
@@ -1040,6 +1054,68 @@ void printout(void *hdr, int hdrlen)
     printf("\n");
 }
 
+iovec *serialize_all(int ckpted_s3_index)//std::stringstream &objs, std::stringstream &itable)
+{
+    //int root_inum = 1;
+    int root_inum = 2;
+    next_inode_mutex.lock();
+    ckpt_header h = {.root_inum = (uint32_t)root_inum,
+		            .next_inum = (uint32_t)next_inode,};
+    next_inode_mutex.unlock();
+    std::stringstream objs;
+    std::stringstream itable;
+    std::map<uint32_t,offset_len> imap;
+    size_t objs_offset = sizeof(h);
+    
+    h.next_s3_index = ckpted_s3_index;
+    size_t itable_offset = serialize_tree(objs, objs_offset, root_inum, imap);
+
+    auto [_off,_len] = imap[root_inum];
+    h.root_offset = _off;
+    h.root_len = _len;
+    h.itable_offset = itable_offset;
+
+    size_t itable_len = serialize_itable(itable, imap);  // TODO: is this necessary?
+    h.itable_len = itable_len;
+
+    struct iovec iov[3] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
+            {.iov_base = (void *)objs.str().c_str(), .iov_len = itable_offset-objs_offset},
+            {.iov_base = (void *)itable.str().c_str(), .iov_len = itable_len}};
+
+    return iov;
+
+    // checkpoint is now in three parts:
+    // &h, sizeof(h)
+    // objs.str().c_str(), itable_offset-objs_offset
+    // itable.str().c_str(), itable_len
+}
+
+void deserialize_tree(void *buf, size_t len){
+    void *end = buf + len;
+    while (buf < end) {
+        fs_obj *cur_obj = (fs_obj *)buf;
+        if (cur_obj->type == OBJ_DIR) {
+	        fs_directory *d = new fs_directory((void*)buf, cur_obj->len);
+            buf = buf + cur_obj->len;
+            set_inode_map(cur_obj->inum, d);
+        }
+        else if (cur_obj->type == OBJ_FILE) {
+            fs_file *f = new fs_file((void*)buf, cur_obj->len);
+            buf = buf + cur_obj->len;
+            set_inode_map(cur_obj->inum, f);
+        }
+        else if (cur_obj->type == OBJ_SYMLINK) {
+            fs_link *s = new fs_link((void*)buf, cur_obj->len);
+            buf = buf + cur_obj->len;
+            set_inode_map(cur_obj->inum, s);
+        } else {
+            fs_obj *o = new fs_obj((void*)buf, cur_obj->len);
+            buf = buf + cur_obj->len;
+            set_inode_map(cur_obj->inum, o);
+        }
+    }
+}
+
 // write_everything_out allocates a new metadata log and a new data log.
 // It puts old logs in the buffer so that read threads can get them before they are committed to 
 // S3 backend. After s3_put returns success, old logs are removed from buffer
@@ -1069,6 +1145,7 @@ void write_everything_out(struct objfs *fs)
         .type = 1,
         .hdr_len = (int)(meta_log_size + sizeof(obj_header)),
         .this_index = this_index,
+        .ckpt_index = ckpt_index,
     };
     this_index++;
     written_inodes.clear();
@@ -1089,7 +1166,7 @@ void write_everything_out(struct objfs *fs)
         throw "put failed";
     }
 
-    // TODO: spawn separate cleaner thread
+    // TODO: spawn separate cleaner thread and keep old logs in buffer, like a cache
     old_log_mutex.lock();
     meta_log_buffer.erase(index);
     data_log_buffer.erase(index);
@@ -1150,7 +1227,7 @@ int do_read(struct objfs *fs, int index, void *buf, size_t len, size_t offset, b
     return len;
 }
 
-fs_obj *load_obj(struct objfs *fs, int index, uint32_t offset, size_t len)
+/*fs_obj *load_obj(struct objfs *fs, int index, uint32_t offset, size_t len)
 {
     char buf[len];
     size_t val = do_read(fs, index, (void*)buf, len, offset, true);
@@ -1164,7 +1241,7 @@ fs_obj *load_obj(struct objfs *fs, int index, uint32_t offset, size_t len)
     if (o->type == OBJ_SYMLINK)
 	    return new fs_link((void*)buf, len);
     return new fs_obj((void*)buf, len);
-}
+}*/
 
 
 // actual offset of data in file is the offset in the extent entry
@@ -1279,8 +1356,6 @@ std::tuple<int,int,std::string> path_2_inum2(const char* path)
     } else {
         parent_inum = vec_2_inum(pathvec);
     }
-    //printf(path);
-    //printf("\n%d\n", parent_inum);
 
     return make_tuple(inum, parent_inum, leaf);
 }
@@ -1380,6 +1455,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     int hdr_bytes = sizeof(log_record) + sizeof(log_data);
     char hdr[hdr_bytes];
     log_record *lr = (log_record*) hdr;
+    //lr->index = ++log_record_index;
     log_data *ld = (log_data*) lr->data;
 
     lr->type = LOG_DATA;
@@ -1424,6 +1500,7 @@ void write_inode(fs_obj *f)
     size_t len = sizeof(log_record) + sizeof(log_inode);
     char buf[len];
     log_record *rec = (log_record*)buf;
+    //rec->index = ++log_record_index;
     log_inode *in = (log_inode*)rec->data;
 
     rec->type = LOG_INODE;
@@ -1453,6 +1530,7 @@ void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
     size_t len = sizeof(log_record) + sizeof(log_create) + leaf.length();
     char buf[len+sizeof(log_record)];
     log_record *rec = (log_record*) buf;
+    //rec->index = ++log_record_index;
     log_create *cr8 = (log_create*) rec->data;
 
     rec->type = LOG_CREATE;
@@ -1519,6 +1597,7 @@ void do_log_delete(uint32_t parent_inum, uint32_t inum, std::string name)
     size_t len = sizeof(log_record) + sizeof(log_delete) + name.length();
     char buf[len];
     log_record *rec = (log_record*) buf;
+    //rec->index = ++log_record_index;
     log_delete *del = (log_delete*) rec->data;
 
     rec->type = LOG_DELETE;
@@ -1653,6 +1732,7 @@ void do_log_trunc(uint32_t inum, off_t offset)
     size_t len = sizeof(log_record) + sizeof(log_trunc);
     char buf[len];
     log_record *rec = (log_record*) buf;
+    //rec->index = ++log_record_index;
     log_trunc *tr = (log_trunc*) rec->data;
 
     rec->type = LOG_TRUNC;
@@ -1736,6 +1816,7 @@ void do_log_rename(int src_inum, int src_parent, int dst_parent,
 	src_leaf.length() + dst_leaf.length();
     char buf[len];
     log_record *rec = (log_record*)buf;
+    //rec->index = ++log_record_index;
     log_rename *mv = (log_rename*)rec->data;
 
     rec->type = LOG_RENAME;
@@ -1922,6 +2003,7 @@ void write_symlink(int inum, std::string target)
     size_t len = sizeof(log_record) + sizeof(log_symlink) + target.length();
     char buf[sizeof(log_record) + len];
     log_record *rec = (log_record*) buf;
+    //rec->index = ++log_record_index;
     log_symlink *l = (log_symlink*) rec->data;
 
     rec->type = LOG_SYMLNK;
@@ -2029,7 +2111,45 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
     log_mutex.lock();
     write_everything_out(fs);
 
+    //cv.notify_all();
+
     return 0;
+}
+
+void checkpoint() 
+{
+    struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    log_mutex.lock();
+    int ckpted_s3_index = this_index.load();
+    write_everything_out(fs);
+
+    char _key[1024];
+    
+    int cur_ckpt_index = this_index++;
+    sprintf(_key, "%s.%08x.ck", fs->prefix, cur_ckpt_index);
+    std::string key(_key);
+
+    iovec *iov = serialize_all(ckpted_s3_index);
+    
+    std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_put, fs->s3, key, iov, 3);
+    
+    if (S3StatusOK != status.get()){
+        printf("CHECKPOINT PUT FAILED\n");
+        throw "put failed";
+    }
+
+    ckpt_index = cur_ckpt_index;
+}
+
+void checkpointer()
+{
+    using namespace std::literals::chrono_literals;
+    std::unique_lock<std::mutex> lk(cv_m);
+    while (cv.wait_for(lk, 30000ms), []{return true;}){
+        if (quit_ckpt)
+            return;
+        checkpoint();
+    }
 }
 
 void *fs_init(struct fuse_conn_info *conn)
@@ -2050,17 +2170,51 @@ void *fs_init(struct fuse_conn_info *conn)
     if (S3StatusOK != fs->s3->s3_list(fs->prefix, keys))
         throw "bucket list failed";
     
+    std::string last_index_str = keys.back();
+    char postfix[10];
+    int last_index;
+    sscanf(last_index_str.c_str(), "%*[^.].%08x%s", &last_index, postfix); 
+    // If the last object is a checkpoint, just read from it and we're done
+    int last_ckpt_index = last_index;
+    if (strcmp(postfix, ".ck") != 0) {
+        obj_header h;
+        struct iovec iov = {.iov_base = (void *)&h, .iov_len = sizeof(h)};
+        std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_get, fs->s3, last_index_str, 0, sizeof(h), &iov, 1);
+        if (S3StatusOK != status.get()){
+            throw "can't read header";
+        }
+        last_ckpt_index = h.ckpt_index;
+    }
+    
+    ckpt_header ckpt_h;
+    ckpt_h.next_s3_index = -1;
+    ssize_t offset = -1;
+    void *buf;
+    if (last_ckpt_index >= 0) {
+        int len = do_read(fs, last_ckpt_index, &ckpt_h, sizeof(ckpt_h), 0, true);
+        if (len < 0)
+            throw "can't read ckpt header";
+
+        size_t objfs_itable_size = sizeof(ckpt_h.itable_offset - sizeof(ckpt_h) + ckpt_h.itable_len);
+        buf = malloc(objfs_itable_size);
+        len = do_read(fs, last_ckpt_index, buf, objfs_itable_size, sizeof(ckpt_h), true);
+        if (len < 0)
+            throw "can't read ckpt contents";
+        deserialize_tree(buf, ckpt_h.itable_offset - sizeof(ckpt_h));
+        free(buf);
+    }
+
     int n;
     this_index = 0;
     for (auto it = keys.begin(); it != keys.end(); it++) {
-        //int n;
-        //printf("key: %s\n", it->c_str());
-        sscanf(it->c_str(), "%*[^.].%08x", &n);
-        ssize_t offset = get_offset(fs, n, false);
+        sscanf(it->c_str(), "%*[^.].%08x%s", &n, postfix); 
+        if (n <= ckpt_h.next_s3_index) continue;
+        if (strcmp(postfix, ".ck") == 0) continue;
+        offset = get_offset(fs, n, false);
 
         if (offset < 0)
             throw "bad object";
-        void *buf = malloc(offset);
+        buf = malloc(offset);
         struct iovec iov[] = {{.iov_base = buf, .iov_len = (size_t)offset}};
         std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_get, fs->s3, it->c_str(), 0, offset, iov, 1);
         if (S3StatusOK != status.get())
@@ -2085,13 +2239,16 @@ void *fs_init(struct fuse_conn_info *conn)
         d->gid = ctx->gid;
         write_inode(d);
     }
-
+    
+    quit_ckpt = false;
+    std::thread (checkpointer).detach();
 
     return (void*) fs;
 }
 
 void fs_teardown(void)
 {
+    quit_ckpt = true;
     inode_mutex.lock();
     for (auto it = inode_map.begin(); it != inode_map.end();
 	 it = inode_map.erase(it)) ;
