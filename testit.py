@@ -5,7 +5,7 @@ import os, sys
 import ctypes
 import shutil
 
-prefix = '/local0/mount1'
+prefix = 'prefix1'
 
 def div_round_up(n, m):
     return (n + m - 1) // m
@@ -549,7 +549,7 @@ if __name__ == '__main__':
     fp.close()
     '''
     obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 1*1024*1024)
-    obj.init("prefix1")
+    obj.init(prefix)
 #    obj.lib.test_function(ctypes.c_int(1))
     unittest.main()
     

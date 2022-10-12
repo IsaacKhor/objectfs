@@ -265,10 +265,10 @@ void py_sync(void)
     unset_handler();
 }
 
-extern int fs_initialize(const char *prefix); 
-extern char *prefix;
-char prefix_arr[] = "                    ";
-char *prefix = prefix_arr;
+//extern int fs_initialize(const char *prefix); 
+//extern char *prefix;
+//char prefix_arr[] = "                    ";
+//char *prefix = prefix_arr;
 int py_init(const char *_prefix)
 {
     /*
@@ -297,7 +297,8 @@ int py_init(const char *_prefix)
     if (setjmp(bail_buf) == 0) { 
         //val = fs_initialize(prefix);
         //prefix = (char *)_prefix;
-        
+        struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
+        tst_fs->prefix = strdup(_prefix);
         fs_ops.init(NULL);
 
     }
@@ -309,7 +310,7 @@ int py_init(const char *_prefix)
 void set_objectfs_context(char *bucket, char *access_key, char *secret_key, char *host, size_t size) {
     struct objfs *fs = malloc (sizeof (struct objfs));
     fs->bucket = strdup(bucket);
-    fs->prefix = strdup(prefix);
+    //fs->prefix = strdup(prefix);
     fs->host = strdup(host);
     fs->access = strdup(access_key);
     fs->secret = strdup(secret_key);

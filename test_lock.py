@@ -9,7 +9,7 @@ import threading
 import multiprocessing
 from atomic import AtomicLong
 
-prefix = '/local0/mount1'
+prefix = 'prefix1'
 
 def div_round_up(n, m):
     return (n + m - 1) // m
@@ -134,7 +134,7 @@ class tests(unittest.TestCase):
         self.check_write(path, filesz, opsz)
         print("JOIN WRITE TID: %d" % t_id)
 
-    def test_06_write(self):
+    '''def test_06_write(self):
         print('Test 6, write')
         obj.lib.test_function(ctypes.c_int(0))
 
@@ -175,7 +175,7 @@ class tests(unittest.TestCase):
             dd = topdir + '/' + dir
             for m in opsizes:
                 path = dd + '/' + ('file-%d' % m)
-                self.check_write(path, n, m)
+                self.check_write(path, n, m)'''
 
 if __name__ == '__main__':
     os.system("python3 minio_cli.py")
@@ -192,7 +192,7 @@ if __name__ == '__main__':
         pass
 
     obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 1*1024*1024)
-    obj.init("prefix1")
+    obj.init(prefix)
     unittest.main()
     
         

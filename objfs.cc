@@ -956,7 +956,7 @@ size_t read_hdr(int idx, void *data, size_t len)
 
 
 //int this_index = 0;
-std::atomic<int> this_index (0);
+std::atomic<int> this_index (1);
 
 // more serialization
 struct itable_xp {
@@ -1137,10 +1137,10 @@ void write_everything_out(struct objfs *fs)
     void *data_log_head_old = data_log_head;
     data_log_head = data_log_tail = malloc(data_log_len*2);
 
-    meta_log_buffer[this_index] = meta_log_head_old;
-    data_log_buffer[this_index] = data_log_head_old;
-    meta_log_sizes[this_index] = meta_log_size;
-    data_log_sizes[this_index] = data_log_size;
+    meta_log_buffer[index] = meta_log_head_old;
+    data_log_buffer[index] = data_log_head_old;
+    meta_log_sizes[index] = meta_log_size;
+    data_log_sizes[index] = data_log_size;
 
     char _key[1024];
     sprintf(_key, "%s.%08x", fs->prefix, this_index.load());
@@ -1178,11 +1178,15 @@ void write_everything_out(struct objfs *fs)
 
     // TODO: spawn separate cleaner thread and keep old logs in buffer, like a cache
     old_log_mutex.lock();
-    meta_log_buffer.erase(index);
-    data_log_buffer.erase(index);
+    if (meta_log_buffer.find(index) != meta_log_buffer.end()) {
+        free(meta_log_buffer[index]);
+        free(data_log_buffer[index]);
+        //meta_log_buffer[index] = NULL;
+        //data_log_buffer[index] = NULL;
+        meta_log_buffer.erase(index);
+        data_log_buffer.erase(index);
+    }
     old_log_mutex.unlock();
-    free(meta_log_head_old);
-    free(data_log_head_old);
     meta_log_sizes.erase(index);
     data_log_sizes.erase(index);
 
@@ -1200,7 +1204,7 @@ void maybe_write(struct objfs *fs)
     log_mutex.lock();
     if ((meta_offset() > meta_log_len) || (data_offset() > data_log_len)) {    
         // TODO: maybe a thread pool?
-        std::thread (write_everything_out,fs).detach();
+        std::thread (write_everything_out, fs).detach();
     }
     else {
         log_mutex.unlock();
@@ -1524,12 +1528,12 @@ void write_inode(fs_obj *f)
     in->rdev = f->rdev;
     in->mtime = f->mtime;
 
+    // TODO: how do we save time here?
+    const std::unique_lock<std::mutex> lock(log_mutex);
     if (written_inodes.find(in->inum) != written_inodes.end()){
-        const std::unique_lock<std::mutex> lock(log_mutex);
         memcpy(written_inodes[in->inum], rec, len);
     } 
     else {
-        const std::unique_lock<std::mutex> lock(log_mutex);
         memcpy(meta_log_tail, rec, len);
         written_inodes[in->inum] = meta_log_tail;
         meta_log_tail = len + (char*)meta_log_tail;
@@ -2139,7 +2143,7 @@ void checkpoint()
     ckpting_mutex.lock();
     log_mutex.lock();
     int ckpted_s3_index = this_index.load();
-    std::thread (write_everything_out,fs).detach();
+    std::thread (write_everything_out, fs).detach();
 
     char _key[1024];
     
@@ -2172,7 +2176,7 @@ void checkpointer()
 {
     using namespace std::literals::chrono_literals;
     std::unique_lock<std::mutex> lk(cv_m);
-    while (cv.wait_for(lk, 30000ms), []{return true;}){
+    while (cv.wait_for(lk, 1000ms), []{return true;}){
         if (quit_ckpt)
             return;
         checkpoint();
@@ -2202,19 +2206,23 @@ void *fs_init(struct fuse_conn_info *conn)
     int last_index;
     sscanf(last_index_str.c_str(), "%*[^.].%08x%s", &last_index, postfix); 
     // If the last object is a checkpoint, just read from it and we're done
-    int last_ckpt_index = last_index;
+    int last_ckpt_index = -1;
     if (strcmp(postfix, ".ck") != 0) {
-        obj_header h;
-        struct iovec iov = {.iov_base = (void *)&h, .iov_len = sizeof(h)};
-        std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_get, fs->s3, last_index_str, 0, sizeof(h), &iov, 1);
-        if (S3StatusOK != status.get()){
-            throw "can't read header";
+        if (last_index != 0) {
+            obj_header h;
+            struct iovec iov = {.iov_base = (void *)&h, .iov_len = sizeof(h)};
+            std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_get, fs->s3, last_index_str, 0, sizeof(h), &iov, 1);
+            if (S3StatusOK != status.get()){
+                throw "can't read header";
+            }
+            last_ckpt_index = h.ckpt_index;
         }
-        last_ckpt_index = h.ckpt_index;
+    } else {
+        last_ckpt_index = last_index;
     }
     
     ckpt_header ckpt_h;
-    ckpt_h.next_s3_index = -1;
+    ckpt_h.next_s3_index = 0;
     ssize_t offset = -1;
     void *buf;
     if (last_ckpt_index >= 0) {
@@ -2229,10 +2237,11 @@ void *fs_init(struct fuse_conn_info *conn)
             throw "can't read ckpt contents";
         deserialize_tree(buf, ckpt_h.itable_offset - sizeof(ckpt_h));
         free(buf);
+        buf = NULL;
     }
 
     int n;
-    this_index = 0;
+    this_index = 1;
     for (auto it = keys.begin(); it != keys.end(); it++) {
         sscanf(it->c_str(), "%*[^.].%08x%s", &n, postfix); 
         if (n <= ckpt_h.next_s3_index) continue;
@@ -2269,7 +2278,7 @@ void *fs_init(struct fuse_conn_info *conn)
     
     quit_ckpt = false;
     put_before_ckpt = false;
-    std::thread (checkpointer).detach();
+    //std::thread (checkpointer).detach();
 
     return (void*) fs;
 }
@@ -2283,26 +2292,32 @@ void fs_teardown(void)
 	 it = inode_map.erase(it)) ;
     inode_mutex.unlock();
     
-    this_index = 0;
+    this_index = 1;
 
     written_inodes.clear();
     
     //log_mutex.lock();
     free(meta_log_head);
     free(data_log_head);
+    meta_log_head = NULL;
+    data_log_head = NULL;
     //log_mutex.unlock();
 
     for (auto it = data_offsets.begin(); it != data_offsets.end();
 	 it = data_offsets.erase(it));
 
+    old_log_mutex.lock();
     for (auto it = meta_log_buffer.begin(); it != meta_log_buffer.end(); it++) {
         free(it->second);
+        it->second = NULL;
         meta_log_buffer.erase(it);
     }
     for (auto it = data_log_buffer.begin(); it != data_log_buffer.end(); it++) {
         free(it->second);
+        it->second = NULL;
         data_log_buffer.erase(it);
     }
+    old_log_mutex.unlock();
     for (auto it = meta_log_sizes.begin(); it != meta_log_sizes.end();
 	 it = meta_log_sizes.erase(it));
     for (auto it = data_log_sizes.begin(); it != data_log_sizes.end();
