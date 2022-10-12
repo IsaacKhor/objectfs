@@ -62,10 +62,14 @@
 std::shared_mutex inode_mutex;
 std::mutex log_mutex;
 std::shared_mutex old_log_mutex;
+std::shared_mutex ckpting_mutex;  // checkpoint() holds this mutex so that inode map and fs_obj's cannot be modified
+std::mutex ckpt_put_mutex; // checkpoint() holds this mutex and wait for write_everything_out to confirm successful put to backend
 std::condition_variable cv;
+std::condition_variable ckpt_cv;
 std::mutex cv_m;
 std::mutex logger_mutex;
 bool quit_ckpt;
+bool put_before_ckpt; // In checkpoint(), check if write_everything_out completed before serialize_all
 
 std::atomic<int> next_inode (3); // the root "" has inum 2
 std::atomic<int> ckpt_index (-1); // record the latest checkpoint object index
@@ -343,14 +347,14 @@ size_t fs_file::serialize(std::ostream &s)
     s.write((char*)&hdr, sizeof(hdr));
 
     // TODO - merge adjacent extents (not sure it ever happens...)
-    read_lock();
+    //read_lock();
     for (auto it = extents.begin(); it != extents.end(); it++) {
         auto [file_offset, ext] = *it;
         extent_xp _e = {.file_offset = file_offset, .objnum = ext.objnum,
                 .obj_offset = ext.offset, .len = ext.len};
         s.write((char*)&_e, sizeof(_e));
     }
-    read_unlock();
+    //read_unlock();
     return bytes;
 }
 
@@ -434,7 +438,7 @@ size_t fs_directory::serialize(std::ostream &s,
     size_t bytes = hdr.len = length();
     s.write((char*)&hdr, sizeof(hdr));
     
-    read_lock();
+    //read_lock();
     for (auto it = dirents.begin(); it != dirents.end(); it++) {
         auto [name, inum] = *it;
         auto[offset,len] = map[inum];
@@ -444,7 +448,7 @@ size_t fs_directory::serialize(std::ostream &s,
         s.write((char*)&de, sizeof(de));
         s.write(name.c_str(), namelen);
     }
-    read_unlock();
+    //read_unlock();
     return bytes;
 }
 
@@ -624,9 +628,9 @@ std::unordered_map<uint32_t, fs_obj*>    inode_map;
 size_t serialize_tree(std::ostream &s, size_t offset, uint32_t inum,
 		      std::map<uint32_t,offset_len> &map)
 {
-    inode_mutex.lock_shared();
+    //inode_mutex.lock_shared();
     fs_obj *obj = inode_map[inum];
-    inode_mutex.unlock_shared();
+    //inode_mutex.unlock_shared();
     
     if (obj->type != OBJ_DIR) {
         size_t len = obj->serialize(s);
@@ -635,12 +639,12 @@ size_t serialize_tree(std::ostream &s, size_t offset, uint32_t inum,
     }
     else {
 	    fs_directory *dir = (fs_directory*)obj;
-        dir->read_lock();
+        //dir->read_lock();
         for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
             auto [name,inum2] = *it;
             offset = serialize_tree(s, offset, inum2, map);
         }
-        dir->read_unlock();
+        //dir->read_unlock();
         size_t len = dir->serialize(s, map);
         return offset + len;
     }
@@ -731,6 +735,7 @@ static int read_log_inode(log_inode *in)
 
 void do_trunc(fs_file *f, off_t new_size)
 {
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     f->write_lock();
     while (true) {
         auto it = f->extents.lookup(new_size);
@@ -775,6 +780,7 @@ int read_log_trunc(log_trunc *tr)
 static int read_log_delete(log_delete *rm)
 {
     const std::unique_lock<std::shared_mutex> lock(inode_mutex);
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     if (inode_map.find(rm->parent) == inode_map.end())
 	    return -1;
     if (inode_map.find(rm->inum) == inode_map.end())
@@ -839,6 +845,7 @@ static int read_log_rename(log_rename *mv)
     }
     parent2->read_unlock();
 	
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     parent1->write_lock();
     parent1->dirents.erase(name1);
     parent1->write_unlock();
@@ -878,6 +885,7 @@ int read_log_create(log_create *c)
 	    return -1;
 
     fs_directory *d = (fs_directory*) inode_map[c->parent_inum];
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     auto name = std::string(&c->name[0], c->namelen);
     d->write_lock();
     d->dirents[name] = c->inum;
@@ -1056,12 +1064,11 @@ void printout(void *hdr, int hdrlen)
 
 iovec *serialize_all(int ckpted_s3_index)//std::stringstream &objs, std::stringstream &itable)
 {
-    //int root_inum = 1;
     int root_inum = 2;
-    next_inode_mutex.lock();
+    //next_inode_mutex.lock();
     ckpt_header h = {.root_inum = (uint32_t)root_inum,
 		            .next_inum = (uint32_t)next_inode,};
-    next_inode_mutex.unlock();
+    //next_inode_mutex.unlock();
     std::stringstream objs;
     std::stringstream itable;
     std::map<uint32_t,offset_len> imap;
@@ -1075,12 +1082,12 @@ iovec *serialize_all(int ckpted_s3_index)//std::stringstream &objs, std::strings
     h.root_len = _len;
     h.itable_offset = itable_offset;
 
-    size_t itable_len = serialize_itable(itable, imap);  // TODO: is this necessary?
-    h.itable_len = itable_len;
+    //size_t itable_len = serialize_itable(itable, imap);  // TODO: is this necessary?
+    //h.itable_len = itable_len;
 
-    struct iovec iov[3] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
-            {.iov_base = (void *)objs.str().c_str(), .iov_len = itable_offset-objs_offset},
-            {.iov_base = (void *)itable.str().c_str(), .iov_len = itable_len}};
+    struct iovec iov[2] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
+            {.iov_base = (void *)objs.str().c_str(), .iov_len = itable_offset-objs_offset}};//,
+            //{.iov_base = (void *)itable.str().c_str(), .iov_len = itable_len}};
 
     return iov;
 
@@ -1165,6 +1172,9 @@ void write_everything_out(struct objfs *fs)
         printf("PUT FAILED\n");
         throw "put failed";
     }
+
+    put_before_ckpt = true;
+    ckpt_cv.notify_all();
 
     // TODO: spawn separate cleaner thread and keep old logs in buffer, like a cache
     old_log_mutex.lock();
@@ -1446,6 +1456,7 @@ int fs_write(const char *path, const char *buf, size_t len,
         return -EISDIR;
     }
 
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     fs_file *f = (fs_file*)obj;
     
     f->read_lock();
@@ -1566,6 +1577,7 @@ int fs_mkdir(const char *path, mode_t mode)
     next_inode_mutex.lock();
     inum = next_inode++;
     next_inode_mutex.unlock();
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     fs_directory *dir = new fs_directory;
     dir->type = OBJ_DIR;
     dir->inum = inum;
@@ -1635,6 +1647,7 @@ int fs_rmdir(const char *path)
     }
     dir->read_unlock();
     
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     inode_mutex.lock();
     fs_directory *parent = (fs_directory*)inode_map[parent_inum];
     inode_map.erase(inum);
@@ -1668,6 +1681,7 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
     
     next_inode_mutex.lock();
     inum = next_inode++;
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     fs_file *f = new fs_file;	// yeah, OBJ_OTHER gets a useless extent map
 
     f->type = type;
@@ -1790,6 +1804,7 @@ int fs_unlink(const char *path)
         return -EISDIR;
     }
     
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     fs_directory *dir = (fs_directory*)inode_map[parent_inum];
     inode_mutex.unlock_shared();
 
@@ -1859,6 +1874,7 @@ int fs_rename(const char *src_path, const char *dst_path)
         return -ENOTDIR;
     }
 
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     srcdir->write_lock();
     srcdir->dirents.erase(src_leaf);
     srcdir->write_unlock();
@@ -2034,6 +2050,7 @@ int fs_symlink(const char *path, const char *contents)
 	    return -ENOTDIR;
     }
     
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     fs_link *l = new fs_link;
     l->type = OBJ_SYMLINK;
     next_inode_mutex.lock();
@@ -2119,9 +2136,10 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 void checkpoint() 
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    ckpting_mutex.lock();
     log_mutex.lock();
     int ckpted_s3_index = this_index.load();
-    write_everything_out(fs);
+    std::thread (write_everything_out,fs).detach();
 
     char _key[1024];
     
@@ -2130,7 +2148,15 @@ void checkpoint()
     std::string key(_key);
 
     iovec *iov = serialize_all(ckpted_s3_index);
+    ckpting_mutex.unlock();
     
+    std::unique_lock<std::mutex> ckpt_lk(ckpt_put_mutex);
+    using namespace std::literals::chrono_literals;
+    while (ckpt_cv.wait_for(ckpt_lk, 300ms, []{return !put_before_ckpt;})){
+        // This while loop waits for ckpt_cv.notify_all
+        // Setting put_before_ckpt to true releases it
+    }
+    if (quit_ckpt) return;
     std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_put, fs->s3, key, iov, 3);
     
     if (S3StatusOK != status.get()){
@@ -2139,6 +2165,7 @@ void checkpoint()
     }
 
     ckpt_index = cur_ckpt_index;
+    put_before_ckpt = false;
 }
 
 void checkpointer()
@@ -2241,6 +2268,7 @@ void *fs_init(struct fuse_conn_info *conn)
     }
     
     quit_ckpt = false;
+    put_before_ckpt = false;
     std::thread (checkpointer).detach();
 
     return (void*) fs;
@@ -2249,6 +2277,7 @@ void *fs_init(struct fuse_conn_info *conn)
 void fs_teardown(void)
 {
     quit_ckpt = true;
+    put_before_ckpt = true;
     inode_mutex.lock();
     for (auto it = inode_map.begin(); it != inode_map.end();
 	 it = inode_map.erase(it)) ;
