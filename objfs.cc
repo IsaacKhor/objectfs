@@ -1181,14 +1181,12 @@ void write_everything_out(struct objfs *fs)
     if (meta_log_buffer.find(index) != meta_log_buffer.end()) {
         free(meta_log_buffer[index]);
         free(data_log_buffer[index]);
-        //meta_log_buffer[index] = NULL;
-        //data_log_buffer[index] = NULL;
         meta_log_buffer.erase(index);
         data_log_buffer.erase(index);
+        meta_log_sizes.erase(index);
+        data_log_sizes.erase(index);
     }
     old_log_mutex.unlock();
-    meta_log_sizes.erase(index);
-    data_log_sizes.erase(index);
 
 }
 
@@ -2296,12 +2294,12 @@ void fs_teardown(void)
 
     written_inodes.clear();
     
-    //log_mutex.lock();
+    log_mutex.lock();
     free(meta_log_head);
     free(data_log_head);
     meta_log_head = NULL;
     data_log_head = NULL;
-    //log_mutex.unlock();
+    log_mutex.unlock();
 
     for (auto it = data_offsets.begin(); it != data_offsets.end();
 	 it = data_offsets.erase(it));
@@ -2317,11 +2315,11 @@ void fs_teardown(void)
         it->second = NULL;
         data_log_buffer.erase(it);
     }
-    old_log_mutex.unlock();
     for (auto it = meta_log_sizes.begin(); it != meta_log_sizes.end();
 	 it = meta_log_sizes.erase(it));
     for (auto it = data_log_sizes.begin(); it != data_log_sizes.end();
 	 it = data_log_sizes.erase(it));
+    old_log_mutex.unlock();
 
     next_inode_mutex.lock();
     next_inode = 3;
