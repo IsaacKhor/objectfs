@@ -237,7 +237,8 @@ enum obj_type {
 class fs_obj {
 public:
     uint32_t        type : 4;
-    uint32_t        len : 28;	// of serialized metadata
+    //uint32_t        len : 28;	// of serialized metadata
+    size_t          len : 28;
     uint32_t        inum;
     uint32_t        mode;
     uint32_t        uid, gid;
@@ -245,7 +246,7 @@ public:
     int64_t         size;
     struct timespec mtime;
     size_t length(void) {return sizeof(fs_obj);}
-    size_t serialize(std::ostream &s);
+    size_t serialize(std::stringstream &s);
     fs_obj(void *ptr, size_t len);
     fs_obj(){}
 };
@@ -260,7 +261,7 @@ fs_obj::fs_obj(void *ptr, size_t len)
  * using the object in-memory layout itself, so any change to the code
  * might change the on-disk layout.
  */
-size_t fs_obj::serialize(std::ostream &s)
+size_t fs_obj::serialize(std::stringstream &s)
 {
     fs_obj hdr = *this;
     size_t bytes = hdr.len = sizeof(hdr);
@@ -294,7 +295,7 @@ class fs_file : public fs_obj {
 public:
     extmap  extents;
     size_t length(void);
-    size_t serialize(std::ostream &s);
+    size_t serialize(std::stringstream &s);
     fs_file(void *ptr, size_t len);
     fs_file(){};
     void write_lock(){
@@ -340,7 +341,7 @@ size_t fs_file::length(void)
     return len;
 }
 
-size_t fs_file::serialize(std::ostream &s)
+size_t fs_file::serialize(std::stringstream &s)
 {
     fs_obj hdr = *this;
     size_t bytes = hdr.len = length();
@@ -384,7 +385,7 @@ class fs_directory : public fs_obj {
 public:
     std::map<std::string,uint32_t> dirents;
     size_t length(void);
-    size_t serialize(std::ostream &s, std::map<uint32_t,offset_len> &m);
+    size_t serialize(std::stringstream &s, std::map<uint32_t,offset_len> &m);
     fs_directory(void *ptr, size_t len);
     fs_directory(){};
     void write_lock(){
@@ -431,7 +432,7 @@ size_t fs_directory::length(void)
     return bytes;
 }
 
-size_t fs_directory::serialize(std::ostream &s,
+size_t fs_directory::serialize(std::stringstream &s,
 			     std::map<uint32_t,offset_len> &map)
 {
     fs_obj hdr = *this;
@@ -458,7 +459,7 @@ class fs_link : public fs_obj {
 public:
     std::string target;
     size_t length(void);
-    size_t serialize(std::ostream &s);
+    size_t serialize(std::stringstream &s);
     fs_link(void *ptr, size_t len);
     fs_link(){}
 };
@@ -483,7 +484,7 @@ size_t fs_link::length(void)
 
 // serialize to an ostream
 //
-size_t fs_link::serialize(std::ostream &s)
+size_t fs_link::serialize(std::stringstream &s)
 {
     fs_obj hdr = *this;
     size_t bytes = hdr.len = length();
@@ -625,14 +626,14 @@ std::unordered_map<uint32_t, fs_obj*>    inode_map;
 
 
 // returns new offset
-size_t serialize_tree(std::ostream &s, size_t offset, uint32_t inum,
+size_t serialize_tree(std::stringstream &s, size_t offset, uint32_t inum,
 		      std::map<uint32_t,offset_len> &map)
 {
     //inode_mutex.lock_shared();
     fs_obj *obj = inode_map[inum];
     //inode_mutex.unlock_shared();
     
-    if (obj->type != OBJ_DIR) {
+    if (obj->type != OBJ_DIR) { 
         size_t len = obj->serialize(s);
         map[inum] = std::make_pair(offset, len);
         return offset + len;
@@ -642,7 +643,7 @@ size_t serialize_tree(std::ostream &s, size_t offset, uint32_t inum,
         //dir->read_lock();
         for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
             auto [name,inum2] = *it;
-            offset = serialize_tree(s, offset, inum2, map);
+            //offset = serialize_tree(s, offset, inum2, map);
         }
         //dir->read_unlock();
         size_t len = dir->serialize(s, map);
@@ -966,7 +967,7 @@ struct itable_xp {
     uint32_t len;
 };
 
-size_t serialize_itable(std::ostream &s,
+size_t serialize_itable(std::stringstream &s,
 			std::map<uint32_t,offset_len> &map)
 {
     const std::shared_lock<std::shared_mutex> lock(inode_mutex);
@@ -1062,34 +1063,37 @@ void printout(void *hdr, int hdrlen)
     printf("\n");
 }
 
-iovec *serialize_all(int ckpted_s3_index)//std::stringstream &objs, std::stringstream &itable)
+int serialize_all(int ckpted_s3_index, ckpt_header *h, std::stringstream &objs)
 {
     int root_inum = 2;
     //next_inode_mutex.lock();
-    ckpt_header h = {.root_inum = (uint32_t)root_inum,
-		            .next_inum = (uint32_t)next_inode,};
+    //ckpt_header h = {.root_inum = (uint32_t)root_inum,
+	//	            .next_inum = (uint32_t)next_inode,};
+
+    h->root_inum = (uint32_t)root_inum;
+    h->next_inum = (uint32_t)next_inode;
     //next_inode_mutex.unlock();
-    std::stringstream objs;
-    std::stringstream itable;
+    //std::stringstream objs;
+    //std::stringstream itable;
     std::map<uint32_t,offset_len> imap;
     size_t objs_offset = sizeof(h);
     
-    h.next_s3_index = ckpted_s3_index;
+    h->next_s3_index = ckpted_s3_index;
     size_t itable_offset = serialize_tree(objs, objs_offset, root_inum, imap);
 
     auto [_off,_len] = imap[root_inum];
-    h.root_offset = _off;
-    h.root_len = _len;
-    h.itable_offset = itable_offset;
+    h->root_offset = _off;
+    h->root_len = _len;
+    h->itable_offset = itable_offset;
 
     //size_t itable_len = serialize_itable(itable, imap);  // TODO: is this necessary?
     //h.itable_len = itable_len;
 
-    struct iovec iov[2] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
-            {.iov_base = (void *)objs.str().c_str(), .iov_len = itable_offset-objs_offset}};//,
+    //struct iovec iov[2] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
+    //        {.iov_base = (void *)objs.str().c_str(), .iov_len = itable_offset-objs_offset}};//,
             //{.iov_base = (void *)itable.str().c_str(), .iov_len = itable_len}};
 
-    return iov;
+    return itable_offset-objs_offset;
 
     // checkpoint is now in three parts:
     // &h, sizeof(h)
@@ -1193,6 +1197,7 @@ void write_everything_out(struct objfs *fs)
 void fs_sync(void)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     log_mutex.lock();
     write_everything_out(fs);
 }
@@ -2135,13 +2140,14 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
     return 0;
 }
 
-void checkpoint() 
+void checkpoint()//(struct objfs *fs) 
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     ckpting_mutex.lock();
     log_mutex.lock();
     int ckpted_s3_index = this_index.load();
     std::thread (write_everything_out, fs).detach();
+    //write_everything_out(fs);
 
     char _key[1024];
     
@@ -2149,8 +2155,14 @@ void checkpoint()
     sprintf(_key, "%s.%08x.ck", fs->prefix, cur_ckpt_index);
     std::string key(_key);
 
-    iovec *iov = serialize_all(ckpted_s3_index);
+    ckpt_header h;
+    std::stringstream objs;
+    int objs_size = serialize_all(ckpted_s3_index, &h, objs);
+    std::string str = objs.str();
+    struct iovec iov[2] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
+        {.iov_base = (void *)(str.c_str()), .iov_len = objs_size}};
     ckpting_mutex.unlock();
+    size_t length = objs.str().length();
     
     std::unique_lock<std::mutex> ckpt_lk(ckpt_put_mutex);
     using namespace std::literals::chrono_literals;
@@ -2159,7 +2171,7 @@ void checkpoint()
         // Setting put_before_ckpt to true releases it
     }
     if (quit_ckpt) return;
-    std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_put, fs->s3, key, iov, 3);
+    std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_put, fs->s3, key, iov, 2);
     
     if (S3StatusOK != status.get()){
         printf("CHECKPOINT PUT FAILED\n");
@@ -2170,20 +2182,25 @@ void checkpoint()
     put_before_ckpt = false;
 }
 
-void checkpointer()
+void checkpointer()//(struct objfs *fs)
 {
     using namespace std::literals::chrono_literals;
     std::unique_lock<std::mutex> lk(cv_m);
-    while (cv.wait_for(lk, 1000ms), []{return true;}){
-        if (quit_ckpt)
+    while (cv.wait_for(lk, 10000ms), []{return true;}){
+        if (quit_ckpt){
+            //free(fs);
+            //fs = NULL;
             return;
-        checkpoint();
+        }
+        checkpoint();//(fs);
     }
 }
 
 void *fs_init(struct fuse_conn_info *conn)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    //struct objfs *fs = (struct objfs *)malloc(sizeof(struct objfs));
+    //fs = (struct objfs *)fuse_get_context()->private_data;
 
     // initialization - FIXME
     //log_mutex.lock();
@@ -2276,14 +2293,22 @@ void *fs_init(struct fuse_conn_info *conn)
     
     quit_ckpt = false;
     put_before_ckpt = false;
-    //std::thread (checkpointer).detach();
+
+    // TODO: Only libobjfs inits set reserved[0] to 9, this prevents objfs-mount from starting the checkpointing thread and makes testing easier (for now)
+    if (conn->reserved[0] == 9) {
+        //std::thread (checkpointer, fs).detach();
+        std::thread (checkpointer).detach();
+    }
+    //checkpointer();
 
     return (void*) fs;
 }
 
-void fs_teardown(void)
+void fs_teardown(void *foo)
 {
     quit_ckpt = true;
+    cv.notify_all();
+    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     put_before_ckpt = true;
     inode_mutex.lock();
     for (auto it = inode_map.begin(); it != inode_map.end();
@@ -2385,6 +2410,7 @@ struct fuse_operations fs_ops = {
     .fsync = fs_fsync,
     .readdir = fs_readdir,
     .init = fs_init,
+    .destroy = fs_teardown,
     .create = fs_create,
     .utimens = fs_utimens,
 };

@@ -295,15 +295,23 @@ int py_init(const char *_prefix)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) { 
-        //val = fs_initialize(prefix);
-        //prefix = (char *)_prefix;
         struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
         tst_fs->prefix = strdup(_prefix);
-        fs_ops.init(NULL);
-
+        struct fuse_conn_info info;
+        info.reserved[0] = 9;
+        fs_ops.init(&info);
     }
     unset_handler();
     return val;
+}
+
+void py_teardown()
+{
+    set_handler();
+    if (setjmp(bail_buf) == 0) { 
+        fs_ops.destroy(NULL);
+    }
+    unset_handler();
 }
 
 

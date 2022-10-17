@@ -64,6 +64,8 @@ class tests(unittest.TestCase):
     def test_01_mkdir(self):
         print('Test 1, mkdir (top level):')
 
+        obj.init(prefix)
+
         dirs_1 = (('/test' + str(s), 0o755) for s in range(10000))
         dirs_2 = (('/test' + str(s), 0o700) for s in range(10000, 20000))
         dirs_3 = (('/test' + str(s), 0o777) for s in range(20000, 30000))
@@ -99,6 +101,7 @@ class tests(unittest.TestCase):
                 self.assertOK(v, 'readdir %s' % path)
                 self.assertEqual(len(des), 0,
                                     msg='readdir %s: %d results (should be 0)' % (path, len(des)))
+        obj.teardown()
 
     def do_write(self, path, filesz, opsz):
         v = obj.create(path, 0o777)
@@ -136,6 +139,7 @@ class tests(unittest.TestCase):
 
     def test_06_write(self):
         print('Test 6, write')
+        obj.init(prefix)
         obj.lib.test_function(ctypes.c_int(0))
 
         topdir = '/test_6'
@@ -176,6 +180,7 @@ class tests(unittest.TestCase):
             for m in opsizes:
                 path = dd + '/' + ('file-%d' % m)
                 self.check_write(path, n, m)
+        obj.teardown()
 
 if __name__ == '__main__':
     os.system("python3 minio_cli.py")
@@ -192,7 +197,7 @@ if __name__ == '__main__':
         pass
 
     obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 1*1024*1024)
-    obj.init(prefix)
+    #obj.init(prefix)
     unittest.main()
     
         

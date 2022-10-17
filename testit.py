@@ -33,6 +33,7 @@ class tests(unittest.TestCase):
     
     def test_01_mkdir(self):
         print('Test 1, mkdir (top level):')
+        obj.init(prefix)
 
         dirs = (('/test1', 0o755), ('/test2', 0o700), ('/test3', 0o777))
         for path,mode in dirs:
@@ -63,6 +64,7 @@ class tests(unittest.TestCase):
             self.assertOK(v, 'readdir %s' % path)
             self.assertEqual(len(des), 0,
                                  msg='readdir %s: %d results (should be 0)' % (path, len(des)))
+        obj.teardown()
         # FSCK???
 
     def check_dirs(self, mkdir, top, dirs):
@@ -85,6 +87,8 @@ class tests(unittest.TestCase):
         
     def test_02_mkdir(self):
         print('Test 2, mkdir (subdirectories)')
+
+        obj.init(prefix)
 
         # create new directories to make test standalone
         topdirs = ['/test2_%d' % i for i in range(3)]
@@ -114,6 +118,7 @@ class tests(unittest.TestCase):
 
         print('32 subdirs...')
         self.check_dirs(False, topdirs[2], ['dir%d' % i for i in range(32)])
+        obj.teardown()
 
     def create_files(self, top, files, mode):
         for f in files:
@@ -139,6 +144,8 @@ class tests(unittest.TestCase):
 
     def test_03_create(self):
         print('Test 3, create')
+
+        obj.init(prefix)
         
         # create new directories to make test standalone
         topdirs = ['/test3_%d' % i for i in range(3)]
@@ -171,9 +178,12 @@ class tests(unittest.TestCase):
 
         print('32 files...')
         self.check_files(topdirs[2], ['file%d' % i for i in range(31)], 0o500)
+        obj.teardown()
         
     def test_04_create(self):
         print('Test 4, long names')
+
+        obj.init(prefix)
 
         topdir = '/test4'
         v = obj.mkdir(topdir, 0o777)
@@ -212,9 +222,12 @@ class tests(unittest.TestCase):
         self.assertOK(v, 'readdir %s' % topdir)
         names = [str(de.name,'UTF-8') for de in des]
         self.assertTrue(longname in names)
+        obj.teardown()
 
     def test_05_badpaths(self):
         print('Test 5, bad paths')
+
+        obj.init(prefix)
 
         topdir = '/test5'
         v = obj.mkdir(topdir, 0o777)
@@ -242,6 +255,7 @@ class tests(unittest.TestCase):
             print(' ', path, ':', obj.strerr(v))
             v = obj.mkdir(topdir+'/'+path, 0o777)
             self.assertEqual(v, err, msg="path=%s err=%d (not %d)" % (path,v, err))
+        obj.teardown()
 
     def do_write(self, path, filesz, opsz):
         v = obj.create(path, 0o777)
@@ -276,6 +290,8 @@ class tests(unittest.TestCase):
     def test_06_write(self):
         print('Test 6, write')
 
+        obj.init(prefix)
+
         topdir = '/test6'
         v = obj.mkdir(topdir, 0o777)
         self.assertOK(v, 'mkdir %s' % topdir)
@@ -308,10 +324,12 @@ class tests(unittest.TestCase):
             for m in opsizes:
                 path = dd + '/' + ('file-%d' % m)
                 self.check_write(path, n, m)
+        obj.teardown()
 
     def test_07_unlink(self):
         print( 'Test 7, unlink')
 
+        obj.init(prefix)
         topdir = '/test7'
         v = obj.mkdir(topdir, 0o777)
         self.assertOK(v, 'mkdir %s' % topdir)
@@ -342,9 +360,12 @@ class tests(unittest.TestCase):
         for path in files:
             v,sb = obj.getattr(path)
             self.assertEqual(-v, obj.ENOENT, msg='post-sync: %s not deleted' % path)
-        
+        obj.teardown()
+
     def test_08_rmdir_unlink(self):
         print( 'Test 8, rmdir')
+
+        obj.init(prefix)
 
         topdir = '/test8'
         v = obj.mkdir(topdir, 0o777)
@@ -394,9 +415,12 @@ class tests(unittest.TestCase):
         for d in ('/dir3', '/dir1/a', '/dir1/b'):
             v,sb = obj.getattr(topdir + d)
             self.assertEqual(v, -obj.ENOENT, msg='pre-sync %s not removed' % (topdir+d))
-        
+        obj.teardown()
+
     def test_09_rename(self):
         print( 'Test 9, rename')
+
+        obj.init(prefix)
 
         topdir = '/test9'
         v = obj.mkdir(topdir, 0o777)
@@ -445,9 +469,12 @@ class tests(unittest.TestCase):
         self.assertEqual(v, -obj.ENOENT, msg='post-sync rename: %s->%s' % (f1, f2))
         v,sb = obj.getattr(f2)
         self.assertOK(v, 'post-sync rename(%s, %s)' % (f1,f2))
+        obj.teardown()
 
     def test_10_chmod(self):
         print( 'Test 10, chmod')
+
+        obj.init(prefix)
         topdir = '/test10'
         v = obj.mkdir(topdir, 0o777)
         self.assertOK(v, 'mkdir %s' % topdir)
@@ -478,10 +505,13 @@ class tests(unittest.TestCase):
         v = obj.chmod(d, m)
         v,sb = obj.getattr(d)
         self.assertEqual(sb.st_mode & ~obj.S_IFMT, m)
+        obj.teardown()
  
-    def test_12_truncate(self):
-        print( 'Test 12, truncate')
-        topdir = '/test12'
+    def test_11_truncate(self):
+        print( 'Test 11, truncate')
+
+        obj.init(prefix)
+        topdir = '/test11'
         v = obj.mkdir(topdir, 0o777)
         self.assertOK(v, 'mkdir %s' % topdir)
 
@@ -519,12 +549,13 @@ class tests(unittest.TestCase):
             v,sb = obj.getattr(path)
             self.assertOK(v, 'getattr(%s)' % path)
             self.assertEqual(sb.st_size, 0)
+        obj.teardown()
 
         
 if __name__ == '__main__':
     os.system("python3 minio_cli.py")
     dir = "/local0/mount1"
-    try:
+    '''try:
         for de in os.scandir(dir):
             if os.path.isfile(dir + '/' + de.name):
                 print('deleting file: ', dir+'/'+de.name)
@@ -533,23 +564,11 @@ if __name__ == '__main__':
                 print('deleting dir: ', dir+'/'+de.name)
                 shutil.rmtree(dir + '/' + de.name)
     except OSError(e):
-        pass
-    '''
-    try:
-        os.mkdir(dir)
-    except OSError:
-        pass
-    
-    fs = b'\x4f\x42\x46\x53\x01\x00\x00\x00\x01\x00\x00\x00\x3e\x00\x00\x00' + \
-      b'\x00\x00\x00\x00\x81\x02\x01\x00\x00\x00\xe4\x41\x00\x00\x00\x00' + \
-      b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x60\x94\xd1' + \
-      b'\x3a\x60\x00\x00\x00\x00\x71\x47\xfa\x2e\x00\x00\x00\x00'
-    fp = open(prefix + '.00000000', 'wb')
-    fp.write(fs)
-    fp.close()
-    '''
+        pass'''
+
     obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 1*1024*1024)
-    obj.init(prefix)
+    #obj.teardown()
+    #obj.init(prefix)
 #    obj.lib.test_function(ctypes.c_int(1))
     unittest.main()
     
