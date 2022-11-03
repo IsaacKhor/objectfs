@@ -2420,10 +2420,14 @@ void *fs_init(struct fuse_conn_info *conn)
 
     int n;
     next_s3_index = ckpt_h.ckpted_s3_index + 1;
+    postfix[0] = '\0';
     for (auto it = keys.begin(); it != keys.end(); it++) {
         sscanf(it->c_str(), "%*[^.].%08x%s", &n, postfix); 
+        if (strcmp(postfix, ".ck") == 0) {
+            postfix[0] = '\0';
+            continue;
+        }
         if (n <= (int)ckpt_h.ckpted_s3_index) continue;
-        if (strcmp(postfix, ".ck") == 0) continue;
         offset = get_offset(fs, n, false);
 
         if (offset < 0)
@@ -2462,7 +2466,7 @@ void *fs_init(struct fuse_conn_info *conn)
 
     // TODO: Only libobjfs inits set reserved[0] to 9, this prevents objfs-mount from starting the checkpointing thread and makes testing easier (for now)
     if (conn->reserved[0] == 9) {
-        //std::thread(fifo).detach();
+        std::thread(fifo).detach();
         std::thread (checkpointer, fs).detach();
     }
 
@@ -2478,7 +2482,7 @@ void fs_teardown(void *foo)
 
     {
         std::unique_lock<std::mutex> lk(cv_m);
-        cv.wait(lk, []{return (!quit_ckpt);});//&&(!quit_fifo);});
+        cv.wait(lk, []{return (!quit_ckpt)&&(!quit_fifo);});
         printf("quit ckpter&fifo finished in fs_teardown\n");
     }
     const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
