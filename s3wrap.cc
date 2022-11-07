@@ -160,6 +160,31 @@ S3Status s3_target::s3_get(std::string key, ssize_t offset, ssize_t len,
     return ctx.status;
 }
 
+S3Status s3_target::s3_delete(std::string key)
+{
+    S3ResponseHandler h;
+    h.propertiesCallback = response_properties;
+    h.completeCallback = response_complete;
+
+    s3_context ctx;
+
+    S3BucketContext bkt_ctx = { host.c_str(), bucket.c_str(), protocol,
+				S3UriStylePath, access.c_str(), secret.c_str(),
+				0,   /* security token */
+				0 }; /* authRegion */    
+    do {
+        S3_delete_object(&bkt_ctx,
+                      key.c_str(),
+                      0,        /* requestContext */
+                      0,        /* timeoutMs */
+                      &h,
+                      (void*)&ctx);
+    } while (S3_status_is_retryable(ctx.status) && ctx.should_retry());
+
+    // TODO throw exception if status != S3StatusOK
+    return ctx.status;
+}
+
 int put_data_callback(int size, char *buf, void *data)
 {
     s3_context *ctx = (s3_context*)data;

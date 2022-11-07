@@ -20,6 +20,7 @@ public:
 
     S3Status s3_get(std::string key, ssize_t offset, ssize_t len,
 		     struct iovec *iov, int iov_cnt);
+    S3Status s3_delete(std::string key);
     S3Status s3_put(std::string key, struct iovec *iov, int iov_cnt);
     S3Status s3_head(std::string key, ssize_t *p_len);
     S3Status s3_list(std::string prefix, std::list<std::string> &keys);

@@ -59,6 +59,7 @@
 #include <chrono>
 #include <fstream>
 #include <queue>
+#include <ctime>
 
 std::shared_mutex inode_mutex;
 std::mutex log_mutex;
@@ -91,6 +92,8 @@ std::map<int, size_t> meta_log_sizes;
 std::map<int, size_t> data_log_sizes;
 std::map<int, void *> written_inodes;
 std::queue<int> fifo_queue;
+std::map<int, std::map<int, time_t>> access_times;  //the first key is objnum, the second key is obj offset, value is last read time
+std::set<std::tuple<double, int, int>> util_rates;
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -540,6 +543,8 @@ struct log_data {
     int64_t  file_offset;	// in bytes
     int64_t  size;		// file size after this write
     uint32_t len;		// bytes
+    time_t access_time;  // timestamp for last access
+    bool valid;
 } __attribute__((packed,aligned(1)));
 
 /* inode update. Note that this is all that's needed for special
@@ -625,6 +630,7 @@ struct obj_header {
     int32_t hdr_len;
     int32_t this_index;
     int32_t ckpt_index; // the object index of the latest checkpoint
+    int32_t data_len; // length of data log
     char    data[];
 };
 
@@ -1051,6 +1057,11 @@ size_t meta_offset(void)
 }
 
 void write_inode(fs_obj *f);
+void gc(struct objfs *, int);
+void gc_read(struct objfs *, char *, size_t, int);
+void gc_write(struct objfs *, const char *, size_t, int);
+void gc_read_write(struct objfs *, int);
+int get_total_file_size(int);
 
 int verbose;
 
@@ -1153,6 +1164,7 @@ void write_everything_out(struct objfs *fs)
         .hdr_len = (int)(meta_log_size + sizeof(obj_header)),
         .this_index = next_s3_index,
         .ckpt_index = ckpt_index,
+        .data_len = data_log_size,
     };
     next_s3_index++;
     for (auto it = written_inodes.begin(); it != written_inodes.end();
@@ -1246,21 +1258,6 @@ int do_read(struct objfs *fs, int index, void *buf, size_t len, size_t offset, b
     return len;
 }
 
-/*fs_obj *load_obj(struct objfs *fs, int index, uint32_t offset, size_t len)
-{
-    char buf[len];
-    size_t val = do_read(fs, index, (void*)buf, len, offset, true);
-    if (val != len)
-	    return nullptr;
-    fs_obj *o = (fs_obj*)buf;
-    if (o->type == OBJ_DIR)
-	    return new fs_directory((void*)buf, len);
-    if (o->type == OBJ_FILE)
-	    return new fs_file((void*)buf, len);
-    if (o->type == OBJ_SYMLINK)
-	    return new fs_link((void*)buf, len);
-    return new fs_obj((void*)buf, len);
-}*/
 
 
 // actual offset of data in file is the offset in the extent entry
@@ -1290,6 +1287,7 @@ int get_offset(struct objfs *fs, int index, bool ckpt)
 //
 int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
 {
+    access_times[index][offset] = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     log_mutex.lock();
     if (index == next_s3_index) {
         len = std::min(len, data_offset() - offset);
@@ -1510,11 +1508,14 @@ int fs_write(const char *path, const char *buf, size_t len,
     log_mutex.lock();
     size_t obj_offset = data_offset();
 
+    time_t time_now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     *ld = (log_data) { .inum = (uint32_t)inum,
 		       .obj_offset = (uint32_t)obj_offset,
 		       .file_offset = (int64_t)offset,
-		       .size = (int64_t)new_size, // TODO: 'size' is not needed
-		       .len = (uint32_t)len };
+		       //.size = (int64_t)new_size, // TODO: 'size' is not needed
+		       .len = (uint32_t)len,
+               .access_time = time_now,
+               .valid = true};
 
     memcpy(meta_log_tail, hdr, hdr_bytes);
     meta_log_tail = hdr_bytes + (char*)meta_log_tail;
@@ -2243,8 +2244,52 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
     return 0;
 }
 
+void fifo() {
+    int fifo_limit = 1000;
+    std::unique_lock lk(fifo_mutex);
+    while (true) {
+        if (quit_fifo) {
+            while (fifo_size > 0) {
+                int index = fifo_queue.front();
+                fifo_queue.pop();
+                fifo_size--;
+                old_log_mutex.lock();
+                free(meta_log_buffer[index]);
+                free(data_log_buffer[index]);
+                meta_log_buffer.erase(index);
+                data_log_buffer.erase(index);
+                meta_log_sizes.erase(index);
+                data_log_sizes.erase(index);
+                old_log_mutex.unlock();
+            }
+            quit_fifo = false;
+            cv.notify_all();
+            printf("quit fifo\n");
+            return;
+        }
+        fifo_cv.wait(lk, [&fifo_limit]{return (fifo_size.load() > fifo_limit)||quit_fifo;});
+        while (fifo_size > fifo_limit) {
+            int index = fifo_queue.front();
+            fifo_queue.pop();
+            fifo_size--;
+            old_log_mutex.lock();
+            free(meta_log_buffer[index]);
+            free(data_log_buffer[index]);
+            meta_log_buffer.erase(index);
+            data_log_buffer.erase(index);
+            meta_log_sizes.erase(index);
+            data_log_sizes.erase(index);
+            old_log_mutex.unlock();
+        }
+    }
+}
+
 void checkpoint(struct objfs *fs)
 {
+    {
+        std::unique_lock<std::mutex> sync_lk(sync_mutex);
+        writing_log_count++;
+    }
     //struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     ckpting_mutex.lock();
     if (quit_ckpt) {
@@ -2306,6 +2351,12 @@ void checkpoint(struct objfs *fs)
         ckpt_index++;
     }
     ckpt_index++;
+
+    gc(fs, ckpted_s3_index);
+    {
+        std::unique_lock<std::mutex> sync_lk(sync_mutex);
+        writing_log_count--;
+    }
 }
 
 void checkpointer(struct objfs *fs)
@@ -2325,44 +2376,174 @@ void checkpointer(struct objfs *fs)
     }
 }
 
-void fifo() {
-    int fifo_limit = 1000;
-    std::unique_lock lk(fifo_mutex);
-    while (true) {
-        if (quit_fifo) {
-            while (fifo_size > 0) {
-                int index = fifo_queue.front();
-                fifo_queue.pop();
-                fifo_size--;
-                old_log_mutex.lock();
-                free(meta_log_buffer[index]);
-                free(data_log_buffer[index]);
-                meta_log_buffer.erase(index);
-                data_log_buffer.erase(index);
-                meta_log_sizes.erase(index);
-                data_log_sizes.erase(index);
-                old_log_mutex.unlock();
-            }
-            quit_fifo = false;
-            cv.notify_all();
-            printf("quit fifo\n");
-            return;
+int get_total_file_size(int inum){
+    fs_obj *obj = inode_map[inum];
+
+    if (obj->type == OBJ_FILE) {
+        fs_file *file = (fs_file *)obj;
+        int extent_sizes = 0;
+        for (auto it = file->extents.begin(); it != file->extents.end(); it++) {
+            auto [file_offset, ext] = *it;
+            extent_sizes += ext.len;
         }
-        fifo_cv.wait(lk, [&fifo_limit]{return (fifo_size.load() > fifo_limit)||quit_fifo;});
-        while (fifo_size > fifo_limit) {
-            int index = fifo_queue.front();
-            fifo_queue.pop();
-            fifo_size--;
-            old_log_mutex.lock();
-            free(meta_log_buffer[index]);
-            free(data_log_buffer[index]);
-            meta_log_buffer.erase(index);
-            data_log_buffer.erase(index);
-            meta_log_sizes.erase(index);
-            data_log_sizes.erase(index);
-            old_log_mutex.unlock();
+        return extent_sizes;
+    }
+    else if (obj->type == OBJ_DIR) {
+	    fs_directory *dir = (fs_directory*)obj;
+        int subdir_sizes = 0;
+        for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
+            auto [name,inum2] = *it;
+            subdir_sizes += get_total_file_size(inum2);
+        }
+        return subdir_sizes;
+    }
+    return 0;
+}
+
+void gc_read_write(struct objfs *fs, int inum){
+    fs_obj *obj = inode_map[inum];
+
+    if (obj->type == OBJ_FILE) {
+        fs_file *file = (fs_file *)obj;
+        size_t extent_sizes = 0;
+        for (auto it = file->extents.begin(); it != file->extents.end(); it++) {
+            auto [file_offset, ext] = *it;
+            extent_sizes += ext.len;
+        }
+        char buf[(int)extent_sizes];
+        gc_read(fs, buf, extent_sizes, inum);
+        gc_write(fs, buf, extent_sizes, inum);
+    }
+    else if (obj->type == OBJ_DIR) {
+	    fs_directory *dir = (fs_directory*)obj;
+        for (auto it = dir->dirents.begin(); it != dir->dirents.end(); it++) {
+            auto [name,inum2] = *it;
+            gc_read_write(fs, inum2);
         }
     }
+}
+
+void gc(struct objfs *fs, int ckpted_s3_index){
+    int root_inum = 2;
+
+    int total_file_size = get_total_file_size(root_inum);
+
+    int total_data_log_size = 0;
+    std::list<std::string> keys;
+    if (S3StatusOK != fs->s3->s3_list(fs->prefix, keys))
+        throw "bucket list failed";
+
+    int n;
+    char postfix[10];
+    for (auto it = keys.begin(); it != keys.end(); it++) {
+        sscanf(it->c_str(), "%*[^.].%08x%s", &n, postfix); 
+        if (strcmp(postfix, ".ck") == 0) {
+            postfix[0] = '\0';
+            continue;
+        }
+        obj_header h;
+        ssize_t len = do_read(fs, n, &h, sizeof(h), 0, false);
+
+        if (len < 0)
+            throw "bad object";
+
+        total_data_log_size += h.data_len;
+    }
+
+    float util_rate = total_file_size / total_data_log_size;
+
+    printf("UTIL RATE %f\n", util_rate);
+    if (util_rate > 0.5) {
+        return;
+    }
+    gc_read_write(fs, root_inum);
+
+    if (data_offset() != 0 && meta_offset() != 0) {
+        ckpted_s3_index = next_s3_index.load(); 
+        {
+            std::unique_lock<std::mutex> sync_lk(sync_mutex);
+            writing_log_count++;
+        }
+        write_everything_out(fs);
+    }
+
+    postfix[0] = '\0';
+    // TODO: also remove all other checkpoints before the previous one
+    for (auto it = keys.begin(); it != keys.end(); it++) {
+        sscanf(it->c_str(), "%*[^.].%08x%s", &n, postfix); 
+        if (strcmp(postfix, ".ck") == 0) {
+            postfix[0] = '\0';
+            continue;
+        }
+        if (n > ckpted_s3_index) continue;
+        std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_delete, fs->s3, it->c_str());
+        
+        if (S3StatusOK != status.get()){
+            printf("DELETE FAILED\n");
+            throw "delete failed";
+        }
+    }
+    printf("GC finished\n");
+}
+
+void gc_read(struct objfs *fs, char *buf, size_t len, int inum)
+{
+    fs_file *f = (fs_file *)inode_map[inum];
+    off_t offset = 0;
+
+    for (auto it = f->extents.lookup(0);
+	 len > 0 && it != f->extents.end(); it++) {
+	    auto [base, e] = *it;
+        if (base > offset) {
+            size_t skip = base-offset; 
+            if (skip > len)
+               skip = len;
+            offset += skip;
+            buf += skip;
+            len -= skip;
+        }
+        else {
+            size_t skip = offset - base;
+            size_t _len = e.len - skip; 
+            if (_len > len)
+                _len = len;
+            if (read_data(fs, buf, e.objnum, e.offset+skip, _len) < 0){
+                return;
+            }
+            offset += _len;
+            buf += _len;
+            len -= _len;
+        }
+    }
+}
+
+void gc_write(struct objfs *fs, const char *buf, size_t len, int inum)
+{
+    int hdr_bytes = sizeof(log_record) + sizeof(log_data);
+    char hdr[hdr_bytes];
+    log_record *lr = (log_record*) hdr;
+    log_data *ld = (log_data*) lr->data;
+
+    lr->type = LOG_DATA;
+    lr->len = sizeof(log_data);
+
+    size_t obj_offset = data_offset();
+
+    time_t time_now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    *ld = (log_data) { .inum = (uint32_t)inum,
+		       .obj_offset = (uint32_t)obj_offset,
+		       .file_offset = (int64_t)0,
+		       .len = (uint32_t)len,
+               .access_time = time_now, // TODO: probably not needed
+               .valid = true};
+
+    memcpy(meta_log_tail, hdr, hdr_bytes);
+    meta_log_tail = hdr_bytes + (char*)meta_log_tail;
+    if (len > 0) {
+        memcpy(data_log_tail, buf, len);
+        data_log_tail = len + (char*)data_log_tail;
+    }
+    maybe_write(fs);
 }
 
 void *fs_init(struct fuse_conn_info *conn)
@@ -2376,7 +2557,7 @@ void *fs_init(struct fuse_conn_info *conn)
     meta_log_len = 2 * 64 * 1024;
     meta_log_head = meta_log_tail = malloc(meta_log_len*4);
     data_log_len = 2 * 8 * 1024 * 1024;
-    data_log_head = data_log_tail = malloc(data_log_len*4);  // TODOO: what length? Was *2 previously
+    data_log_head = data_log_tail = malloc(data_log_len*4);  // TODO: what length? Was *2 previously
     //log_mutex.unlock();
 
     fs->s3 = new s3_target(fs->host, fs->bucket, fs->access, fs->secret, false);
@@ -2466,6 +2647,7 @@ void *fs_init(struct fuse_conn_info *conn)
 
     // TODO: Only libobjfs inits set reserved[0] to 9, this prevents objfs-mount from starting the checkpointing thread and makes testing easier (for now)
     if (conn->reserved[0] == 9) {
+        //std::thread(gc, fs).detach();
         std::thread(fifo).detach();
         std::thread (checkpointer, fs).detach();
     }
@@ -2475,6 +2657,7 @@ void *fs_init(struct fuse_conn_info *conn)
 
 void fs_teardown(void *foo)
 {
+    // TODO: access_times (locking, cleaning, initing)
     quit_ckpt = true;
     quit_fifo = true;
     cv.notify_all();
@@ -2532,23 +2715,6 @@ int fs_mkfs(const char *prefix)
     return 0;
 }
 #endif
-
-/*
-struct fuse_operations fs_ops = {
-    .getattr = fs_getattr,
-    .readlink = fs_readlink,
-    .mkdir = fs_mkdir,
-    .unlink = fs_unlink,
-    .rmdir = fs_rmdir,
-    .rename = fs_rename,
-    .chmod = fs_chmod,
-    .truncate = fs_truncate,
-    .statfs = fs_statfs,
-    .fsync = fs_fsync,
-    .init = fs_init,
-    .create = fs_create,
-    .utimens = fs_utimens,
-};*/
 
 struct fuse_operations fs_ops = {
     .getattr = fs_getattr,
