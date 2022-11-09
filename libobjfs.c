@@ -271,26 +271,6 @@ void py_sync(void)
 //char *prefix = prefix_arr;
 int py_init(const char *_prefix)
 {
-    /*
-    char **argv = malloc(5*sizeof(char *)run
-    argv[0] = "/root/git/objectfs/objfs-mount";
-    argv[1] = "-odefault_permissions";
-    argv[2] = "-oallow_other";
-    argv[3] = "-d";
-    argv[4] = "/local0/mount1";
-    int argc = 5;
-    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-    args.allocated = 1;
-    
-    struct objfs fs = { .bucket = bucket, .prefix = _prefix,
-        .host = "10.255.23.109:9000", .access = "minio", .secret = "miniostorage",
-        .use_local = 0, .chunk_size = 1*1024*1024};
-
-    fuse_main(args.argc, args.argv, &fs_ops, &fs);*/
-
-
-    //char *prefix = (char*) malloc(sizeof(char) * 100);
-    //struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
 
     int val = 0;
     set_handler();
@@ -330,5 +310,5 @@ void set_objectfs_context(char *bucket, char *access_key, char *secret_key, char
         .chunk_size = size};*/
     //fs->s3 = s3_init(bucket, host, access_key, secret_key);
     ctx.private_data = fs;
-    struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
+    //struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
 }

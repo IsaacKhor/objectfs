@@ -5,6 +5,7 @@ import objtest as obj
 import os, sys
 import ctypes
 import shutil
+import time
 import threading
 import multiprocessing
 from atomic import AtomicLong
@@ -65,18 +66,17 @@ class tests(unittest.TestCase):
         print('Test 1, mkdir (top level):')
 
         obj.init(prefix)
+        obj.mkdir("/test_1", 0o755)
 
-        dirs_1 = (('/test' + str(s), 0o755) for s in range(10000))
-        dirs_2 = (('/test' + str(s), 0o700) for s in range(10000, 20000))
-        dirs_3 = (('/test' + str(s), 0o777) for s in range(20000, 30000))
-        #dirs = (('/test1', 0o755), ('/test2', 0o700), ('/test3', 0o777))
+        dirs_1 = (('/test_1/dir' + str(s), 0o755) for s in range(10000))
+        dirs_2 = (('/test_1/dir' + str(s), 0o700) for s in range(10000, 20000))
+        dirs_3 = (('/test_1/dir' + str(s), 0o777) for s in range(20000, 30000))
 
         jobs = []
         
         tid = 0
         for dirs in [dirs_1, dirs_2, dirs_3]:
             jobs.append(threading.Thread(target=self.run_mkdir, args=(dirs, tid, )))
-            #jobs.append(multiprocessing.Process(target=self.run_mkdir, args=(dirs, tid, )))
             tid += 1
 
         for j in jobs:
@@ -86,9 +86,13 @@ class tests(unittest.TestCase):
         for j in jobs:
             j.join()
             
+        print("BEFORE SYNC!\n")
         obj.sync()
+        print("SYNC!\n")
         obj.teardown()
+        print("TEARDOWN!\n")
         obj.init(prefix)
+        print("AFTER INIT\n")
         
         for dirs in [dirs_1, dirs_2, dirs_3]:
             for path,mode in dirs:
@@ -134,6 +138,7 @@ class tests(unittest.TestCase):
     def run_write(self, path, filesz, opsz, t_id):
         print("START WRITE TID: %d" % t_id)
         self.do_write(path, filesz, opsz)
+        print("CHECK WRITE TID: %d" % t_id)
         self.check_write(path, filesz, opsz)
         print("JOIN WRITE TID: %d" % t_id)
 
@@ -170,17 +175,25 @@ class tests(unittest.TestCase):
         for j in jobs:
             j.join()
 
+        print("BEFORE SYNC!\n")
         obj.sync()
+        print("SYNC!\n")
         obj.teardown()
+        print("TEARDOWN!\n")
+        time.sleep(5)
         obj.init(prefix)
+        print("INIT!")
         
         for n in filesizes:
             dir = 'dir-%d' % n
             dd = topdir + '/' + dir
+            print("check "+dir)
             for m in opsizes:
                 path = dd + '/' + ('file-%d' % m)
                 self.check_write(path, n, m)
+        print("BEFORE SECOND TEARDOWN")
         obj.teardown()
+        print("SECOND TEARDOWN")
 
 if __name__ == '__main__':
     os.system("python3 minio_cli.py")

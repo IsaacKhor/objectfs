@@ -125,26 +125,21 @@ class tests(unittest.TestCase):
         for j in jobs:
             j.join()
 
+        #obj.sync()
+        obj.truncate("/test_6/dir-8099/file-17", 0)
+        obj.truncate("/test_6/dir-8099/file-500", 0)
+        obj.truncate("/test_6/dir-37000/file-17", 0)
+        obj.truncate("/test_6/dir-37000/file-500", 0)
+        obj.truncate("/test_6/dir-289150/file-17", 0)
         obj.sync()
-        obj.truncate("/test_6/dir_8099/file_17", 0)
-        obj.truncate("/test_6/dir_8099/file_500", 0)
-        obj.truncate("/test_6/dir_37000/file_17", 0)
-        obj.truncate("/test_6/dir_37000/file_500", 0)
-        obj.truncate("/test_6/dir_289150/file_17", 0)
 
-        print("AFTER TRUNCATE")
+        print("AFTER SYNC")
         time.sleep(30)
         print("BEFORE FIRST TEARDOWN")
         obj.teardown()
         obj.init(prefix)
 
-        for n in filesizes:
-            dir = 'dir-%d' % n
-            dd = topdir + '/' + dir
-            print("check "+dir)
-            for m in opsizes:
-                path = dd + '/' + ('file-%d' % m)
-                self.check_write(path, n, m)
+        self.check_write("/test_6/dir-289150/file-500", 289150, 500)
         obj.teardown()
 
 if __name__ == '__main__':
