@@ -2286,7 +2286,6 @@ void checkpoint(struct objfs *fs)
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
     }
-    //struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     ckpting_mutex.lock();
     if (quit_ckpt) {
         ckpting_mutex.unlock();
@@ -2325,15 +2324,18 @@ void checkpoint(struct objfs *fs)
     struct iovec iov[2] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
         {.iov_base = (void *)(str.c_str()), .iov_len = (size_t)objs_size}};
     //ckpting_mutex.unlock();
+
+    if (ckpt_index == -1) {
+        ckpt_index++;
+    }
+    ckpt_index++;
     
     {
         std::unique_lock<std::mutex> ckpt_lk(ckpt_put_mutex);
         using namespace std::literals::chrono_literals;
         ckpt_cv.wait_for(ckpt_lk, 500ms, []{return put_before_ckpt;});
     }
-    //if (quit_ckpt) {
-    //    return;
-    //}
+    ckpting_mutex.unlock();
 
     printf("writing %s, objs size: %d\n", key.c_str(), objs_size);
     std::future<S3Status> status = std::async(std::launch::deferred, &s3_target::s3_put, fs->s3, key, iov, 2);
@@ -2343,17 +2345,12 @@ void checkpoint(struct objfs *fs)
         throw "put failed";
     }
 
-    if (ckpt_index == -1) {
-        ckpt_index++;
-    }
-    ckpt_index++;
-
-    gc(fs, ckpted_s3_index);
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
     }
-    ckpting_mutex.unlock();
+    gc(fs, ckpted_s3_index);
+    //ckpting_mutex.unlock();
 }
 
 void checkpointer(struct objfs *fs)
@@ -2362,7 +2359,7 @@ void checkpointer(struct objfs *fs)
     std::unique_lock<std::mutex> lk(cv_m);
     while (true) {
         //std::this_thread::sleep_for (std::chrono::seconds(10));
-        cv.wait_for(lk, 10000ms, []{return quit_ckpt;});
+        cv.wait_for(lk, 1000ms, []{return quit_ckpt;});
         checkpoint(fs);
         if (quit_ckpt) {
             quit_ckpt = false;
@@ -2456,6 +2453,7 @@ void gc_read_write(struct objfs *fs, std::vector<gc_info *> *infos){
     for (auto it = infos->begin(); it != infos->end(); it++) {
         gc_info *info = *it;
         char buf[info->len];
+        // TODO: change this to do_read. read extents directly from s3 objs, then write them at objnum before normal fs_writes
         int bytes = gc_read(fs, buf, info->len, info->filenum, (off_t)info->file_offset);
         if (bytes != (int)info->len){
             throw "GC_READ failed";
@@ -2537,6 +2535,7 @@ void gc(struct objfs *fs, int ckpted_s3_index){
 
     if (data_offset() != 0 && meta_offset() != 0) {
         ckpted_s3_index = next_s3_index.load(); 
+        log_mutex.lock();
         {
             std::unique_lock<std::mutex> sync_lk(sync_mutex);
             writing_log_count++;
@@ -2663,7 +2662,6 @@ void *fs_init(struct fuse_conn_info *conn)
 
     // TODO: Only libobjfs inits set reserved[0] to 9, this prevents objfs-mount from starting the checkpointing thread and makes testing easier (for now)
     if (conn->reserved[0] == 9) {
-        //std::thread(gc, fs).detach();
         std::thread(fifo).detach();
         std::thread (checkpointer, fs).detach();
     }

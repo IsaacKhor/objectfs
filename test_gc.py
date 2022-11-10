@@ -75,7 +75,7 @@ class tests(unittest.TestCase):
             self.assertOK(v, 'write %s offset=%d len=%d' % (path, offset, len(chunk)))
             self.assertTrue(v, len(chunk))
         
-    def check_write(self, path, filesz, opsz):
+    def check_write(self, path, filesz):
         data = b'1234567' * div_round_up(filesz, 7)
         data = data[0:filesz]
         v,data2 = obj.read(path, len(data),0)
@@ -92,20 +92,20 @@ class tests(unittest.TestCase):
         print("START WRITE TID: %d" % t_id)
         self.do_write(path, filesz, opsz)
         print("CHECK WRITE TID: %d" % t_id)
-        self.check_write(path, filesz, opsz)
+        self.check_write(path, filesz)
         print("JOIN WRITE TID: %d" % t_id)
 
-    def test_01_write_and_gc(self):
-        print('Test 6, write')
+    def test_01_gc_trunc(self):
+        print('Test 1, GC truncate single thread')
         obj.init(prefix)
         obj.lib.test_function(ctypes.c_int(0))
 
-        topdir = '/test_6'
+        topdir = '/test_1'
         v = obj.mkdir(topdir, 0o777)
         self.assertOK(v, 'mkdir %s' % topdir)
 
-        filesizes = (8099, 37000, 289150)
-        opsizes = (17, 500)
+        filesizes = (7000, 8099, 37000, 100000, 289150)
+        opsizes = (17, 100, 500)
 
         jobs = []
         t_id = 0
@@ -126,20 +126,80 @@ class tests(unittest.TestCase):
             j.join()
 
         #obj.sync()
-        obj.truncate("/test_6/dir-8099/file-17", 0)
-        obj.truncate("/test_6/dir-8099/file-500", 0)
-        obj.truncate("/test_6/dir-37000/file-17", 0)
-        obj.truncate("/test_6/dir-37000/file-500", 0)
-        obj.truncate("/test_6/dir-289150/file-17", 0)
+        obj.truncate("/test_1/dir-8099/file-17", 0)
+        obj.truncate("/test_1/dir-8099/file-500", 0)
+        obj.truncate("/test_1/dir-37000/file-17", 0)
+        obj.truncate("/test_1/dir-37000/file-500", 0)
+        obj.truncate("/test_1/dir-289150/file-17", 0)
         obj.sync()
 
         print("AFTER SYNC")
-        time.sleep(30)
+        time.sleep(15)
         print("BEFORE FIRST TEARDOWN")
         obj.teardown()
         obj.init(prefix)
 
-        self.check_write("/test_6/dir-289150/file-500", 289150, 500)
+        self.check_write("/test_1/dir-289150/file-500", 289150)
+        obj.teardown()
+
+    def run_write_and_trunc(self, path, filesz, opsz, t_id):
+        #print("START WRITE TID: %d" % t_id)
+        self.do_write(path, filesz, opsz)
+        self.check_write(path, filesz)
+
+        print("TRUNCATE TID: %d" % t_id)
+        obj.truncate(path, 2000)
+        obj.truncate(path, 1000)
+        print("CHECK WRITE AFTER TRUNC TID: %d" % t_id)
+        self.check_write(path, 1000)
+
+        print("JOIN WRITE TID: %d" % t_id)
+
+    def test_02_gc_trunc(self):
+        print('Test 2, GC truncate multi thread')
+        obj.init(prefix)
+        obj.lib.test_function(ctypes.c_int(0))
+
+        topdir = '/test_2'
+        v = obj.mkdir(topdir, 0o777)
+        self.assertOK(v, 'mkdir %s' % topdir)
+
+        filesizes = (7000, 8099, 37000, 100000, 289150)
+        opsizes = (17, 100, 500)
+
+        jobs = []
+        t_id = 0
+        for n in filesizes:
+            dir = 'dir-%d' % n
+            dd = topdir + '/' + dir
+            v = obj.mkdir(dd, 0o777)
+            self.assertOK(v, 'mkdir %s' % dd)
+            for m in opsizes:
+                path = dd + '/' + ('file-%d' % m)
+                jobs.append(threading.Thread(target=self.run_write_and_trunc, args=(path, n, m, t_id, )))
+                t_id += 1
+
+        for j in jobs:
+            j.start()
+
+        for j in jobs:
+            j.join()
+
+        obj.sync()
+
+        print("AFTER SYNC")
+        time.sleep(15)
+        print("BEFORE FIRST TEARDOWN")
+        obj.teardown()
+        obj.init(prefix)
+
+        for n in filesizes:
+            dir = 'dir-%d' % n
+            dd = topdir + '/' + dir
+            print("check "+dir)
+            for m in opsizes:
+                path = dd + '/' + ('file-%d' % m)
+                self.check_write(path, 1000)
         obj.teardown()
 
 if __name__ == '__main__':
