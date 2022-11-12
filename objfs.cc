@@ -74,10 +74,12 @@ std::condition_variable sync_cv; // Don't sync before all regular write_everythi
 std::condition_variable fifo_cv;
 std::mutex cv_m;
 std::mutex logger_mutex;
+std::shared_mutex started_gc_mutex;
 std::shared_mutex data_offsets_mutex;
 bool quit_fifo;
 bool quit_ckpt;
 bool put_before_ckpt; // In checkpoint(), check if write_everything_out completed before serialize_all
+bool started_gc;  // After gc starts, this sets to true. fs_write and fs_truncate are recorded so that gc_write doesn't overwrite
 std::atomic<int> writing_log_count (0); // Counts how many write_everything_out() for regular logs is executing
 
 std::atomic<int> fifo_size (0);
@@ -92,8 +94,8 @@ std::map<int, size_t> meta_log_sizes;
 std::map<int, size_t> data_log_sizes;
 std::map<int, void *> written_inodes;
 std::queue<int> fifo_queue;
-std::map<int, std::map<int, time_t>> access_times;  //the first key is objnum, the second key is obj offset, value is last read time
-std::set<std::tuple<double, int, int>> util_rates;
+std::map<int, std::map<int, int> *> writes_after_ckpt;  // first key is inum, second key is offset, value is len
+std::map<int, int> truncs_after_ckpt;  // first key is inum, second key means fs_truncate off_t len
 
 //typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 //                                const struct stat *stbuf, off_t off);
@@ -692,7 +694,7 @@ static void update_inode(fs_obj *obj, log_inode *in)
 }
 
 static void set_inode_map(int inum, fs_obj *ptr){
-    const std::unique_lock<std::shared_mutex> lock(inode_mutex);
+    std::unique_lock lock(inode_mutex);
     if (ptr->type == OBJ_DIR){
         fs_directory *d = (fs_directory *)ptr;
         inode_map[inum] = d;
@@ -801,7 +803,6 @@ int read_log_trunc(log_trunc *tr)
 //
 static int read_log_delete(log_delete *rm)
 {
-    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     const std::unique_lock<std::shared_mutex> lock(inode_mutex);
     if (inode_map.find(rm->parent) == inode_map.end())
 	    return -1;
@@ -838,7 +839,6 @@ static int read_log_symlink(log_symlink *sl)
 //
 static int read_log_rename(log_rename *mv)
 {
-    //const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     const std::shared_lock<std::shared_mutex> lock(inode_mutex);
     if (inode_map.find(mv->parent1) == inode_map.end())
 	    return -1;
@@ -901,7 +901,6 @@ int read_log_data(int idx, log_data *d)
 
 int read_log_create(log_create *c)
 {
-    //const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     const std::shared_lock<std::shared_mutex> lock(inode_mutex);
     auto it = inode_map.find(c->parent_inum);
     if (it == inode_map.end())
@@ -1003,11 +1002,11 @@ struct ckpt_header  {
     char     data[];
 };
 
-
+// TODO: do we need all these fields?
 struct gc_info {
     uint32_t filenum;
     int64_t  file_offset;
-    //uint32_t obj_offset;
+    uint32_t obj_offset;
     uint32_t len;
 }; // TODO: maybe just use log_data
 
@@ -1040,8 +1039,8 @@ size_t meta_offset(void)
 
 void write_inode(fs_obj *f);
 void gc(struct objfs *, int);
-int gc_read(struct objfs *, char *, size_t, int, off_t);
-void gc_write(struct objfs *, const char *, size_t, int);
+void gc_write(struct objfs *, const char *, size_t, int, int);
+void gc_write_extent(void *, int, int, int);
 void gc_read_write(struct objfs *, std::vector<gc_info *> *);
 void get_total_file_size(int, std::map<int, int> &, std::map<int, std::vector<gc_info *> *> &);
 
@@ -1175,15 +1174,6 @@ void write_everything_out(struct objfs *fs)
     }
     ckpt_cv.notify_all();
 
-    // TODO: spawn separate cleaner thread and keep old logs in buffer, like a cache
-    /*old_log_mutex.lock();
-    free(meta_log_buffer[index]);
-    free(data_log_buffer[index]);
-    meta_log_buffer.erase(index);
-    data_log_buffer.erase(index);
-    meta_log_sizes.erase(index);
-    data_log_sizes.erase(index);
-    old_log_mutex.unlock();*/
     fifo_queue.push(index);
     fifo_size++;
     fifo_cv.notify_all();
@@ -1269,7 +1259,6 @@ int get_offset(struct objfs *fs, int index, bool ckpt)
 //
 int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
 {
-    access_times[index][offset] = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     log_mutex.lock();
     if (index == next_s3_index) {
         len = std::min(len, data_offset() - offset);
@@ -1447,7 +1436,7 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
 int fs_write(const char *path, const char *buf, size_t len,
 	     off_t offset, struct fuse_file_info *fi)
 {
-    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
+    std::shared_lock ckpting_lock(ckpting_mutex);
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
@@ -1457,7 +1446,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     int inum;
     inode_mutex.lock_shared(); // TODO: 1469: std::unique_lock lk(inode_mutex);
                                //       1481: lk.unlock();
-    /*if (fi->fh != 0) {
+    /*if (fi->fh != 0) {   TODO: bring this mechanism back
         inum = fi->fh;
     } else {*/
         inum = path_2_inum(path);
@@ -1487,10 +1476,23 @@ int fs_write(const char *path, const char *buf, size_t len,
     lr->type = LOG_DATA;
     lr->len = sizeof(log_data);
 
+    {
+        std::unique_lock gc_lk(started_gc_mutex);
+        if (started_gc) {
+            if (writes_after_ckpt.find(inum) == writes_after_ckpt.end()) {
+                std::map<int, int> *writes = new std::map<int, int>;
+                (*writes)[offset] = (int)len;
+                writes_after_ckpt[inum] = writes;
+            } else {
+                std::map<int, int> *writes = writes_after_ckpt.at(inum);
+                (*writes)[offset] = (int)len;
+            }
+        }
+    }
+
     log_mutex.lock();
     size_t obj_offset = data_offset();
 
-    time_t time_now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     *ld = (log_data) { .inum = (uint32_t)inum,
 		       .obj_offset = (uint32_t)obj_offset,
 		       .file_offset = (int64_t)offset,
@@ -1515,6 +1517,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     f->size = new_size;
     f->extents.update(offset, e);
     f->write_unlock();
+
 
     write_inode(f);
     log_mutex.unlock();
@@ -1578,11 +1581,11 @@ void write_dirent(uint32_t parent_inum, std::string leaf, uint32_t inum)
 int fs_mkdir(const char *path, mode_t mode)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
+    std::shared_lock ckpting_lock(ckpting_mutex);
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
     }
-    const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
 
     inode_mutex.lock_shared();
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
@@ -1658,6 +1661,10 @@ int fs_rmdir(const char *path)
 {
     struct objfs *fs = (struct objfs*) fuse_get_context()->private_data;
     const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
+    {
+        std::unique_lock<std::mutex> sync_lk(sync_mutex);
+        writing_log_count++;
+    }
     inode_mutex.lock_shared();
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
 
@@ -1697,6 +1704,10 @@ int fs_rmdir(const char *path)
     do_log_delete(parent_inum, inum, leaf);
     log_mutex.unlock();
     maybe_write(fs);
+    {
+        std::unique_lock<std::mutex> sync_lk(sync_mutex);
+        writing_log_count--;
+    }
     return 0;
 }
 
@@ -1832,6 +1843,19 @@ int fs_truncate(const char *path, off_t len)
     if (f->type != OBJ_FILE){
 	    return -EINVAL;
     }
+
+    {
+        std::unique_lock gc_lk(started_gc_mutex);
+        if (started_gc) {
+            if (truncs_after_ckpt.find(inum) == truncs_after_ckpt.end()) {
+                truncs_after_ckpt[inum] = (int)len;
+            } else {
+                if (len < truncs_after_ckpt[inum]) {
+                    truncs_after_ckpt[inum] = (int)len;
+                }
+            }
+        }
+    }
     
     do_trunc(f, len);
     log_mutex.lock();
@@ -1880,6 +1904,13 @@ int fs_unlink(const char *path)
     dir->dirents.erase(leaf);
     dir->write_unlock();
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
+
+    {
+        std::unique_lock gc_lk(started_gc_mutex);
+        if (started_gc) {
+            truncs_after_ckpt[inum] = 0;
+        }
+    }
     log_mutex.lock();
     write_inode(dir);
     
@@ -2323,7 +2354,6 @@ void checkpoint(struct objfs *fs)
 
     struct iovec iov[2] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
         {.iov_base = (void *)(str.c_str()), .iov_len = (size_t)objs_size}};
-    //ckpting_mutex.unlock();
 
     if (ckpt_index == -1) {
         ckpt_index++;
@@ -2335,6 +2365,7 @@ void checkpoint(struct objfs *fs)
         using namespace std::literals::chrono_literals;
         ckpt_cv.wait_for(ckpt_lk, 500ms, []{return put_before_ckpt;});
     }
+    started_gc = true;
     ckpting_mutex.unlock();
 
     printf("writing %s, objs size: %d\n", key.c_str(), objs_size);
@@ -2350,7 +2381,6 @@ void checkpoint(struct objfs *fs)
         writing_log_count--;
     }
     gc(fs, ckpted_s3_index);
-    //ckpting_mutex.unlock();
 }
 
 void checkpointer(struct objfs *fs)
@@ -2370,48 +2400,52 @@ void checkpointer(struct objfs *fs)
     }
 }
 
-int gc_read(struct objfs *fs, char *buf, size_t len, int inum, off_t offset)
+void gc_write(struct objfs *fs, void *buf, size_t len, int inum, int file_offset)
 {
-    fs_file *f = (fs_file *)inode_map[inum];
-
-    int bytes = 0;
-    f->read_lock();
-    for (auto it = f->extents.lookup(offset);
-	 len > 0 && it != f->extents.end(); it++) {
-	    auto [base, e] = *it;
-        if (base > offset) {
-            // yow, not supposed to have holes
-            size_t skip = base-offset; // bytes to skip forward from current 'offset'
-            if (skip > len) // extent is past end of requested read
-               skip = len;
-            bytes += skip;
-            offset += skip;
-            buf += skip;
-
-            len -= skip;
+    started_gc_mutex.lock_shared();
+    if (truncs_after_ckpt.find(inum) != truncs_after_ckpt.end()){
+        int t_len = truncs_after_ckpt.at(inum);
+        if (t_len < file_offset) {
+            return;
         }
-        else {
-            size_t skip = offset - base;
-            size_t _len = e.len - skip;  // length of buffer to consume (unmapped=skip,mapped)
-            if (_len > len)
-                _len = len;
-            if (read_data(fs, buf, e.objnum, e.offset+skip, _len) < 0){
-                f->read_unlock();
-                return -EIO;
-            }
-            bytes += _len;
-            offset += _len;
-            buf += _len;
-
-            len -= _len;
+        if (t_len < file_offset + len) {
+            len = t_len - file_offset;
         }
     }
-    f->read_unlock();
-    return bytes;
+    std::map<int, int> *writes;
+    if (writes_after_ckpt.find(inum) != writes_after_ckpt.end()){
+        writes = writes_after_ckpt[inum];
+    }
+
+    int w_offset, w_len;
+    for (auto it = writes->begin(); it != writes->end(); it++)
+    {
+        w_offset = it->first;
+        w_len = it->second;
+
+        if (w_offset + w_len <= file_offset) continue;
+        if (w_offset >= file_offset + len) break;
+        int skip = w_offset + w_len - file_offset;
+        if (w_offset <= file_offset) {
+            buf = (void *)buf + skip;
+            file_offset += skip;
+            len -= skip;
+            continue;
+        }
+
+        gc_write_extent(buf, inum, file_offset, w_offset - file_offset);
+        buf = (void *)buf + skip;
+        file_offset += skip;
+        len -= skip;
+    }
+    if (len > 0) {
+        gc_write_extent(buf, inum, file_offset, len);
+    }
+    started_gc_mutex.unlock_shared();
+    maybe_write(fs);
 }
 
-void gc_write(struct objfs *fs, const char *buf, size_t len, int inum, int file_offset)
-{
+void gc_write_extent(void *buf, int inum, int file_offset, int len) {
     int hdr_bytes = sizeof(log_record) + sizeof(log_data);
     char hdr[hdr_bytes];
     log_record *lr = (log_record*) hdr;
@@ -2420,15 +2454,13 @@ void gc_write(struct objfs *fs, const char *buf, size_t len, int inum, int file_
     lr->type = LOG_DATA;
     lr->len = sizeof(log_data);
 
+    log_mutex.lock();
     size_t obj_offset = data_offset();
-
-    time_t time_now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     *ld = (log_data) { .inum = (uint32_t)inum,
-		       .obj_offset = (uint32_t)obj_offset,
-		       .file_offset = (int64_t)file_offset,
-		       .len = (uint32_t)len};
-               //.access_time = time_now, // TODO: probably not needed
-               //.valid = true};
+            .obj_offset = (uint32_t)obj_offset,
+            .file_offset = (int64_t)file_offset,
+            .len = (uint32_t)len};
+
 
     memcpy(meta_log_tail, hdr, hdr_bytes);
     meta_log_tail = hdr_bytes + (char*)meta_log_tail;
@@ -2438,27 +2470,23 @@ void gc_write(struct objfs *fs, const char *buf, size_t len, int inum, int file_
     }
 
     extent e = {.objnum = (uint32_t)next_s3_index,
-		.offset = (uint32_t)obj_offset, .len = (uint32_t)len};
+        .offset = (uint32_t)obj_offset, .len = (uint32_t)len};
+    log_mutex.unlock();
 
     fs_file *f = (fs_file *)inode_map[inum];
     f->write_lock();
     //f->size = new_size;
     f->extents.update(file_offset, e);
     f->write_unlock();
-    maybe_write(fs);
 }
 
-void gc_read_write(struct objfs *fs, std::vector<gc_info *> *infos){
+void gc_read_write(struct objfs *fs, int objnum, std::vector<gc_info *> *infos){
     if (infos == NULL || infos->size() == 0) return;
     for (auto it = infos->begin(); it != infos->end(); it++) {
         gc_info *info = *it;
         char buf[info->len];
-        // TODO: change this to do_read. read extents directly from s3 objs, then write them at objnum before normal fs_writes
-        int bytes = gc_read(fs, buf, info->len, info->filenum, (off_t)info->file_offset);
-        if (bytes != (int)info->len){
-            throw "GC_READ failed";
-        }
-        gc_write(fs, buf, info->len, info->filenum, info->file_offset);
+        do_read(fs, objnum, (void *)buf, info->len, info->obj_offset, false);
+        gc_write(fs, (void *)buf, info->len, info->filenum, info->file_offset);
     }
 
 }
@@ -2481,9 +2509,9 @@ void get_total_file_size(int inum, std::map<int, int> &total_file_sizes, std::ma
             gc_info* info = (gc_info *) malloc(sizeof(gc_info));
             info->filenum = inum;
             info->file_offset = file_offset;
-            //info->obj_offset = ext.offset;
+            info->obj_offset = ext.offset;
             info->len = ext.len;
-            std::vector<gc_info *>* infos = gc_infos[ext.objnum];
+            //std::vector<gc_info *>* infos = gc_infos[ext.objnum];
             gc_infos[ext.objnum]->push_back(info);
         }
     }
@@ -2518,6 +2546,7 @@ void gc(struct objfs *fs, int ckpted_s3_index){
             postfix[0] = '\0';
             continue;
         }
+        if (n > ckpted_s3_index) break;
         obj_header h;
         ssize_t len = do_read(fs, n, &h, sizeof(h), 0, false);
 
@@ -2529,19 +2558,29 @@ void gc(struct objfs *fs, int ckpted_s3_index){
         if (util_rate > 0.8) {
             continue;
         }
-        gc_read_write(fs, gc_infos[n]);
+        gc_read_write(fs, n, gc_infos[n]);
         objnum_to_delete.push_back(n);
     }
+    started_gc_mutex.lock();
+    started_gc = false;
+    for (auto it = writes_after_ckpt.begin(); it != writes_after_ckpt.end(); it++)
+    {
+        auto [objnum, val] = *it;
+        delete writes_after_ckpt[objnum];
+    }
+    truncs_after_ckpt.clear();
+    started_gc_mutex.unlock();
 
+    log_mutex.lock();
     if (data_offset() != 0 && meta_offset() != 0) {
-        ckpted_s3_index = next_s3_index.load(); 
-        log_mutex.lock();
         {
             std::unique_lock<std::mutex> sync_lk(sync_mutex);
             writing_log_count++;
         }
         printf("Additional GC write everything out\n");
         write_everything_out(fs);
+    } else {
+        log_mutex.unlock();
     }
 
     postfix[0] = '\0';
@@ -2660,6 +2699,7 @@ void *fs_init(struct fuse_conn_info *conn)
         next_inode = std::max((int)it->first + 1, next_inode.load());
     }
 
+    started_gc = false;
     // TODO: Only libobjfs inits set reserved[0] to 9, this prevents objfs-mount from starting the checkpointing thread and makes testing easier (for now)
     if (conn->reserved[0] == 9) {
         std::thread(fifo).detach();
@@ -2671,7 +2711,6 @@ void *fs_init(struct fuse_conn_info *conn)
 
 void fs_teardown(void *foo)
 {
-    // TODO: access_times (locking, cleaning, initing)
     quit_ckpt = true;
     quit_fifo = true;
     cv.notify_all();
