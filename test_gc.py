@@ -164,7 +164,7 @@ class tests(unittest.TestCase):
         v = obj.mkdir(topdir, 0o777)
         self.assertOK(v, 'mkdir %s' % topdir)
 
-        filesizes = (7000, 8099, 37000, 100000, 289150)
+        filesizes = (1001, 8930, 50000, 114514, 1919810)
         opsizes = (17, 100, 500)
 
         jobs = []
@@ -191,7 +191,9 @@ class tests(unittest.TestCase):
         time.sleep(15)
         print("BEFORE FIRST TEARDOWN")
         obj.teardown()
+        print("BEFORE INIT")
         obj.init(prefix)
+        print("AFTER INIT")
 
         for n in filesizes:
             dir = 'dir-%d' % n

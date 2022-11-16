@@ -519,7 +519,7 @@ public:
 
 
 Logger::Logger(std::string path){
-    file_stream.open(path);
+    file_stream.open(path, std::fstream::out | std::fstream::trunc);
 }
 
 Logger::~Logger(void){
@@ -543,7 +543,7 @@ struct log_data {
     uint32_t inum;		// is 32 enough?
     uint32_t obj_offset;	// bytes from start of file data
     int64_t  file_offset;	// in bytes
-    //int64_t  size;		// file size after this write
+    int64_t  size;		// file size after this write
     uint32_t len;		// bytes
     //time_t access_time;  // timestamp for last access
     //bool valid;
@@ -892,7 +892,7 @@ int read_log_data(int idx, log_data *d)
 		.len = d->len};
     f->write_lock();
     f->extents.update(d->file_offset, e);
-    //f->size = d->size;
+    f->size = d->size;
     f->write_unlock();
 
     return 0;
@@ -1496,7 +1496,7 @@ int fs_write(const char *path, const char *buf, size_t len,
     *ld = (log_data) { .inum = (uint32_t)inum,
 		       .obj_offset = (uint32_t)obj_offset,
 		       .file_offset = (int64_t)offset,
-		       //.size = (int64_t)new_size, // TODO: 'size' is not needed?
+		       .size = (int64_t)new_size, // TODO: 'size' is not needed?
 		       .len = (uint32_t)len};
                //.access_time = time_now,
                //.valid = true};
@@ -2389,7 +2389,7 @@ void checkpointer(struct objfs *fs)
     std::unique_lock<std::mutex> lk(cv_m);
     while (true) {
         //std::this_thread::sleep_for (std::chrono::seconds(10));
-        cv.wait_for(lk, 1000ms, []{return quit_ckpt;});
+        cv.wait_for(lk, 5000ms, []{return quit_ckpt;});
         checkpoint(fs);
         if (quit_ckpt) {
             quit_ckpt = false;
@@ -2406,6 +2406,7 @@ void gc_write(struct objfs *fs, void *buf, size_t len, int inum, int file_offset
     if (truncs_after_ckpt.find(inum) != truncs_after_ckpt.end()){
         int t_len = truncs_after_ckpt.at(inum);
         if (t_len < file_offset) {
+            started_gc_mutex.unlock_shared();
             return;
         }
         if (t_len < file_offset + len) {
@@ -2415,28 +2416,28 @@ void gc_write(struct objfs *fs, void *buf, size_t len, int inum, int file_offset
     std::map<int, int> *writes;
     if (writes_after_ckpt.find(inum) != writes_after_ckpt.end()){
         writes = writes_after_ckpt[inum];
-    }
 
-    int w_offset, w_len;
-    for (auto it = writes->begin(); it != writes->end(); it++)
-    {
-        w_offset = it->first;
-        w_len = it->second;
+        int w_offset, w_len;
+        for (auto it = writes->begin(); it != writes->end(); it++)
+        {
+            w_offset = it->first;
+            w_len = it->second;
 
-        if (w_offset + w_len <= file_offset) continue;
-        if (w_offset >= file_offset + len) break;
-        int skip = w_offset + w_len - file_offset;
-        if (w_offset <= file_offset) {
+            if (w_offset + w_len <= file_offset) continue;
+            if (w_offset >= file_offset + len) break;
+            int skip = w_offset + w_len - file_offset;
+            if (w_offset <= file_offset) {
+                buf = (void *)buf + skip;
+                file_offset += skip;
+                len -= skip;
+                continue;
+            }
+
+            gc_write_extent(buf, inum, file_offset, w_offset - file_offset);
             buf = (void *)buf + skip;
             file_offset += skip;
             len -= skip;
-            continue;
         }
-
-        gc_write_extent(buf, inum, file_offset, w_offset - file_offset);
-        buf = (void *)buf + skip;
-        file_offset += skip;
-        len -= skip;
     }
     if (len > 0) {
         gc_write_extent(buf, inum, file_offset, len);
@@ -2454,11 +2455,17 @@ void gc_write_extent(void *buf, int inum, int file_offset, int len) {
     lr->type = LOG_DATA;
     lr->len = sizeof(log_data);
 
+    fs_file *f = (fs_file *)inode_map[inum];
+    f->read_lock();
+    off_t new_size = std::max((off_t)(file_offset+len), (off_t)(f->size));
+    f->read_unlock();
+
     log_mutex.lock();
     size_t obj_offset = data_offset();
     *ld = (log_data) { .inum = (uint32_t)inum,
             .obj_offset = (uint32_t)obj_offset,
             .file_offset = (int64_t)file_offset,
+            .size = (int64_t)new_size,
             .len = (uint32_t)len};
 
 
@@ -2473,9 +2480,9 @@ void gc_write_extent(void *buf, int inum, int file_offset, int len) {
         .offset = (uint32_t)obj_offset, .len = (uint32_t)len};
     log_mutex.unlock();
 
-    fs_file *f = (fs_file *)inode_map[inum];
+    //fs_file *f = (fs_file *)inode_map[inum];
     f->write_lock();
-    //f->size = new_size;
+    f->size = new_size;
     f->extents.update(file_offset, e);
     f->write_unlock();
 }
@@ -2485,7 +2492,7 @@ void gc_read_write(struct objfs *fs, int objnum, std::vector<gc_info *> *infos){
     for (auto it = infos->begin(); it != infos->end(); it++) {
         gc_info *info = *it;
         char buf[info->len];
-        do_read(fs, objnum, (void *)buf, info->len, info->obj_offset, false);
+        read_data(fs, (void *)buf, objnum, info->obj_offset, info->len);
         gc_write(fs, (void *)buf, info->len, info->filenum, info->file_offset);
     }
 
@@ -2554,22 +2561,25 @@ void gc(struct objfs *fs, int ckpted_s3_index){
             throw "bad object";
 
         float util_rate = (float) total_file_sizes[n] / (float) h.data_len;
-        printf("OBJ NUM %d UTIL RATE %f", n, util_rate);
+        printf("OBJ NUM %d UTIL RATE %f\n", n, util_rate);
         if (util_rate > 0.8) {
             continue;
         }
         gc_read_write(fs, n, gc_infos[n]);
         objnum_to_delete.push_back(n);
+        printf("OBJECT %s to be deleted\n", it->c_str());
     }
     started_gc_mutex.lock();
     started_gc = false;
-    for (auto it = writes_after_ckpt.begin(); it != writes_after_ckpt.end(); it++)
+    /*for (auto it = writes_after_ckpt.begin(); it != writes_after_ckpt.end(); it++)
     {
         auto [objnum, val] = *it;
         delete writes_after_ckpt[objnum];
-    }
+    }*/
+    writes_after_ckpt.clear();
     truncs_after_ckpt.clear();
     started_gc_mutex.unlock();
+    gc_infos.clear();
 
     log_mutex.lock();
     if (data_offset() != 0 && meta_offset() != 0) {
