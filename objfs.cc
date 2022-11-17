@@ -72,21 +72,25 @@ std::condition_variable cv;
 std::condition_variable ckpt_cv;
 std::condition_variable sync_cv; // Don't sync before all regular write_everything_out is done
 std::condition_variable fifo_cv;
+std::condition_variable gc_timer_cv;
 std::mutex cv_m;
+std::mutex gc_timer_m;
 std::mutex logger_mutex;
 std::shared_mutex started_gc_mutex;
 std::shared_mutex data_offsets_mutex;
 bool quit_fifo;
 bool quit_ckpt;
+bool quit_gc;
 bool put_before_ckpt; // In checkpoint(), check if write_everything_out completed before serialize_all
 bool started_gc;  // After gc starts, this sets to true. fs_write and fs_truncate are recorded so that gc_write doesn't overwrite
-std::atomic<int> writing_log_count (0); // Counts how many write_everything_out() for regular logs is executing
 
+std::atomic<int> writing_log_count (0); // Counts how many write_everything_out() for regular logs is executing
+std::atomic<int> gc_range (0);   // GC all normal s3 objects before and including this index
 std::atomic<int> fifo_size (0);
 std::atomic<int> next_s3_index (1);
 std::atomic<int> next_inode (3); // the root "" has inum 2
 std::atomic<int> ckpt_index (-1); // record the latest checkpoint object index
-//std::atomic<int> log_record_index (0); 
+
 std::mutex next_inode_mutex;
 std::map<int, void *> meta_log_buffer; // Before a log object is commited to back end, it sits here for read requests
 std::map<int, void *> data_log_buffer; // keys are object indices, values are objects
@@ -545,8 +549,6 @@ struct log_data {
     int64_t  file_offset;	// in bytes
     int64_t  size;		// file size after this write
     uint32_t len;		// bytes
-    //time_t access_time;  // timestamp for last access
-    //bool valid;
 } __attribute__((packed,aligned(1)));
 
 /* inode update. Note that this is all that's needed for special
@@ -1455,7 +1457,6 @@ int fs_write(const char *path, const char *buf, size_t len,
         inode_mutex.unlock_shared();
         return inum;
     }
-    // TODOO: path_2_inum shared lock and this shared lock should be one
     fs_obj *obj = inode_map[inum];
     inode_mutex.unlock_shared();
     if (obj->type != OBJ_FILE){
@@ -1496,10 +1497,8 @@ int fs_write(const char *path, const char *buf, size_t len,
     *ld = (log_data) { .inum = (uint32_t)inum,
 		       .obj_offset = (uint32_t)obj_offset,
 		       .file_offset = (int64_t)offset,
-		       .size = (int64_t)new_size, // TODO: 'size' is not needed?
+		       .size = (int64_t)new_size,
 		       .len = (uint32_t)len};
-               //.access_time = time_now,
-               //.valid = true};
 
     memcpy(meta_log_tail, hdr, hdr_bytes);
     meta_log_tail = hdr_bytes + (char*)meta_log_tail;
@@ -1753,11 +1752,9 @@ int create_node(struct objfs *fs, const char *path, mode_t mode, int type, dev_t
 
     log_mutex.lock();
     write_inode(f);
-    //log_mutex.unlock();
     write_dirent(parent_inum, leaf, inum);
     
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
-    //log_mutex.lock();
     write_inode(dir);
     log_mutex.unlock();
 
@@ -2198,12 +2195,10 @@ int fs_symlink(const char *path, const char *contents)
 
     log_mutex.lock();
     write_inode(l);
-    //log_mutex.unlock();
     write_symlink(inum, leaf);
     write_dirent(parent_inum, leaf, inum);
     
     clock_gettime(CLOCK_REALTIME, &dir->mtime);
-    //log_mutex.lock();
     write_inode(dir);
     log_mutex.unlock();
     maybe_write(fs);
@@ -2229,14 +2224,6 @@ int fs_readlink(const char *path, char *buf, size_t len)
     memcpy(buf, l->target.c_str(), val);
     return val;
 }
-
-/*
-do_log_inode(
-do_log_trunc(
-do_log_delete(
-do_log_symlink(
-do_log_rename(
-*/
 
 #include <sys/statvfs.h>
 
@@ -2271,6 +2258,7 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
     return 0;
 }
 
+// TODO: enable fifo to store old data that's recently read
 void fifo() {
     int fifo_limit = 1000;
     std::unique_lock lk(fifo_mutex);
@@ -2340,11 +2328,11 @@ void checkpoint(struct objfs *fs)
 
     char _key[1024];
     
-    int cur_ckpt_index = ckpt_index + 1;
-    if (cur_ckpt_index == 0) {
-        cur_ckpt_index = 1;
+    if (ckpt_index == -1) {
+        ckpt_index++;
     }
-    sprintf(_key, "%s.%08x.ck", fs->prefix, cur_ckpt_index);
+    ckpt_index++;
+    sprintf(_key, "%s.%08x.ck", fs->prefix, ckpt_index.load());
     std::string key(_key);
 
     ckpt_header h;
@@ -2354,11 +2342,6 @@ void checkpoint(struct objfs *fs)
 
     struct iovec iov[2] = {{.iov_base = (void*)&h, .iov_len = sizeof(h)},
         {.iov_base = (void *)(str.c_str()), .iov_len = (size_t)objs_size}};
-
-    if (ckpt_index == -1) {
-        ckpt_index++;
-    }
-    ckpt_index++;
     
     {
         std::unique_lock<std::mutex> ckpt_lk(ckpt_put_mutex);
@@ -2380,23 +2363,41 @@ void checkpoint(struct objfs *fs)
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
     }
-    gc(fs, ckpted_s3_index);
+    gc_range = ckpted_s3_index;
+    gc_timer_cv.notify_all();
 }
 
-void checkpointer(struct objfs *fs)
+void checkpoint_timer(struct objfs *fs)
 {
     using namespace std::literals::chrono_literals;
     std::unique_lock<std::mutex> lk(cv_m);
     while (true) {
-        //std::this_thread::sleep_for (std::chrono::seconds(10));
         cv.wait_for(lk, 5000ms, []{return quit_ckpt;});
         checkpoint(fs);
         if (quit_ckpt) {
             quit_ckpt = false;
             cv.notify_all();
-            printf("quit checkpointer\n");
+            printf("quit checkpoint_timer\n");
             return;
         }
+    }
+}
+
+void gc_timer(struct objfs *fs)
+{
+    using namespace std::literals::chrono_literals;
+    std::unique_lock<std::mutex> lk(gc_timer_m);
+    int prev_gc_range = 0;
+    while (true) {
+        gc_timer_cv.wait(lk, [&prev_gc_range]{return prev_gc_range < gc_range.load() || quit_gc;});
+        if (quit_gc) {
+            quit_gc = false;
+            cv.notify_all();
+            printf("quit gc_timer\n");
+            return;
+        }
+        gc(fs, gc_range);
+        prev_gc_range = gc_range;
     }
 }
 
@@ -2480,7 +2481,6 @@ void gc_write_extent(void *buf, int inum, int file_offset, int len) {
         .offset = (uint32_t)obj_offset, .len = (uint32_t)len};
     log_mutex.unlock();
 
-    //fs_file *f = (fs_file *)inode_map[inum];
     f->write_lock();
     f->size = new_size;
     f->extents.update(file_offset, e);
@@ -2518,7 +2518,6 @@ void get_total_file_size(int inum, std::map<int, int> &total_file_sizes, std::ma
             info->file_offset = file_offset;
             info->obj_offset = ext.offset;
             info->len = ext.len;
-            //std::vector<gc_info *>* infos = gc_infos[ext.objnum];
             gc_infos[ext.objnum]->push_back(info);
         }
     }
@@ -2539,20 +2538,26 @@ void gc(struct objfs *fs, int ckpted_s3_index){
     std::map<int, std::vector<gc_info *> *> gc_infos;
     get_total_file_size(root_inum, total_file_sizes, gc_infos);
 
-    //int total_data_log_size = 0;
     std::list<std::string> keys;
     if (S3StatusOK != fs->s3->s3_list(fs->prefix, keys))
         throw "bucket list failed";
 
+    if (quit_gc) {
+        return;
+    }
+
     int n;
     char postfix[10];
     std::vector<int> objnum_to_delete;
+    // Calculate util rate of each s3 object which is not a ckpt
+    // Then read valid data and write it again
     for (auto it = keys.begin(); it != keys.end(); it++) {
         sscanf(it->c_str(), "%*[^.].%08x%s", &n, postfix); 
         if (strcmp(postfix, ".ck") == 0) {
             postfix[0] = '\0';
             continue;
         }
+        if (n == 0) continue;
         if (n > ckpted_s3_index) break;
         obj_header h;
         ssize_t len = do_read(fs, n, &h, sizeof(h), 0, false);
@@ -2571,11 +2576,6 @@ void gc(struct objfs *fs, int ckpted_s3_index){
     }
     started_gc_mutex.lock();
     started_gc = false;
-    /*for (auto it = writes_after_ckpt.begin(); it != writes_after_ckpt.end(); it++)
-    {
-        auto [objnum, val] = *it;
-        delete writes_after_ckpt[objnum];
-    }*/
     writes_after_ckpt.clear();
     truncs_after_ckpt.clear();
     started_gc_mutex.unlock();
@@ -2595,6 +2595,7 @@ void gc(struct objfs *fs, int ckpted_s3_index){
 
     postfix[0] = '\0';
     // TODO: maybe remove checkpoints
+    // Remove old objects where we already read and wrote valid data again in new objects
     for(std::vector<int>::iterator it = objnum_to_delete.begin(); it != objnum_to_delete.end(); ++it) {
         n = *it;
         
@@ -2617,12 +2618,10 @@ void *fs_init(struct fuse_conn_info *conn)
     const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
 
     // initialization - FIXME
-    //log_mutex.lock();
     meta_log_len = 2 * 64 * 1024;
     meta_log_head = meta_log_tail = malloc(meta_log_len*4);
     data_log_len = 2 * 8 * 1024 * 1024;
     data_log_head = data_log_tail = malloc(data_log_len*4);  // TODO: what length? Was *2 previously
-    //log_mutex.unlock();
 
     fs->s3 = new s3_target(fs->host, fs->bucket, fs->access, fs->secret, false);
 
@@ -2711,10 +2710,11 @@ void *fs_init(struct fuse_conn_info *conn)
 
     started_gc = false;
     // TODO: Only libobjfs inits set reserved[0] to 9, this prevents objfs-mount from starting the checkpointing thread and makes testing easier (for now)
-    if (conn->reserved[0] == 9) {
+    //if (conn->reserved[0] == 9) {
         std::thread(fifo).detach();
-        std::thread (checkpointer, fs).detach();
-    }
+        std::thread (checkpoint_timer, fs).detach();
+        std::thread (gc_timer, fs).detach();
+    //}
 
     return (void*) fs;
 }
@@ -2722,14 +2722,16 @@ void *fs_init(struct fuse_conn_info *conn)
 void fs_teardown(void *foo)
 {
     quit_ckpt = true;
+    quit_gc = true;
     quit_fifo = true;
     cv.notify_all();
+    gc_timer_cv.notify_all();
     fifo_cv.notify_all();
 
     {
         std::unique_lock<std::mutex> lk(cv_m);
-        cv.wait(lk, []{return (!quit_ckpt)&&(!quit_fifo);});
-        printf("quit ckpter&fifo finished in fs_teardown\n");
+        cv.wait(lk, []{return (!quit_ckpt)&&(!quit_fifo)&&(!quit_gc);});
+        printf("quit ckpter & fifo & gc finished in fs_teardown\n");
     }
     const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
     inode_mutex.lock();
