@@ -63,7 +63,8 @@
 
 std::shared_mutex inode_mutex;
 std::mutex log_mutex;
-std::shared_mutex old_log_mutex;
+std::shared_mutex buffer_mutex;
+std::shared_mutex cache_mutex;
 std::shared_mutex ckpting_mutex;  // checkpoint() holds this mutex so that inode map and fs_obj's cannot be modified
 std::mutex ckpt_put_mutex; // checkpoint() holds this mutex and wait for write_everything_out to confirm successful put to backend
 std::mutex sync_mutex;
@@ -92,10 +93,19 @@ std::atomic<int> next_inode (3); // the root "" has inum 2
 std::atomic<int> ckpt_index (-1); // record the latest checkpoint object index
 
 std::mutex next_inode_mutex;
+
+// Write Buffer
 std::map<int, void *> meta_log_buffer; // Before a log object is commited to back end, it sits here for read requests
 std::map<int, void *> data_log_buffer; // keys are object indices, values are objects
-std::map<int, size_t> meta_log_sizes; 
-std::map<int, size_t> data_log_sizes;
+std::map<int, size_t> meta_log_buffer_sizes; 
+std::map<int, size_t> data_log_buffer_sizes;
+
+// Read Cache
+std::map<int, void *> meta_log_cache;
+std::map<int, void *> data_log_cache;
+std::map<int, size_t> meta_log_cache_sizes; 
+std::map<int, size_t> data_log_cache_sizes;
+
 std::map<int, void *> written_inodes;
 std::queue<int> fifo_queue;
 std::map<int, std::map<int, int> *> writes_after_ckpt;  // first key is inum, second key is offset, value is len
@@ -1133,8 +1143,8 @@ void write_everything_out(struct objfs *fs)
 
     meta_log_buffer[index] = meta_log_head_old;
     data_log_buffer[index] = data_log_head_old;
-    meta_log_sizes[index] = meta_log_size;
-    data_log_sizes[index] = data_log_size;
+    meta_log_buffer_sizes[index] = meta_log_size;
+    data_log_buffer_sizes[index] = data_log_size;
 
     char _key[1024];
     sprintf(_key, "%s.%08x", fs->prefix, next_s3_index.load());
@@ -1170,15 +1180,25 @@ void write_everything_out(struct objfs *fs)
         throw "put failed";
     }
 
+    buffer_mutex.lock();
+    free(meta_log_buffer[index]);
+    free(data_log_buffer[index]);
+    meta_log_buffer.erase(index);
+    data_log_buffer.erase(index);
+    meta_log_buffer_sizes.erase(index);
+    data_log_buffer_sizes.erase(index);
+    buffer_mutex.unlock();
+
     {
         std::unique_lock<std::mutex> ckpt_lk(ckpt_put_mutex);
         put_before_ckpt = true;
     }
     ckpt_cv.notify_all();
 
-    fifo_queue.push(index);
-    fifo_size++;
-    fifo_cv.notify_all();
+
+    //fifo_queue.push(index);
+    //fifo_size++;
+    //fifo_cv.notify_all();
 
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
@@ -1269,18 +1289,47 @@ int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
         return len;
     }
     log_mutex.unlock();
-    old_log_mutex.lock_shared();
+    buffer_mutex.lock_shared();
     if (meta_log_buffer.find(index) != meta_log_buffer.end()) {
-        len = std::min(len, data_log_sizes[index] - offset);
+        len = std::min(len, data_log_buffer_sizes[index] - offset);
         memcpy(buf, offset + (char*)data_log_buffer[index], len);
-        old_log_mutex.unlock_shared();
+        buffer_mutex.unlock_shared();
         return len;
     }
-    old_log_mutex.unlock_shared();
-    size_t n = get_offset(fs, index, false);
-    if (n < 0)
-        return n;
-    return do_read(fs, index, buf, len, offset + n, false);
+    buffer_mutex.unlock_shared();
+    cache_mutex.lock_shared();
+    if (data_log_cache.find(index) != data_log_cache.end()) {
+        len = std::min(len, data_log_cache_sizes[index] - offset);
+        memcpy(buf, offset + (char*)data_log_cache[index], len);
+        cache_mutex.unlock_shared();
+        return len;
+    }
+    cache_mutex.unlock_shared();
+    struct obj_header *h = (struct obj_header*)malloc(sizeof(obj_header));
+    int do_read_resp = do_read(fs, index, (void *)h, sizeof(obj_header), 0, false);
+    if (do_read_resp < 0)
+        return -1;
+
+    data_offsets_mutex.lock();
+    data_offsets[index] = h->hdr_len;
+    data_offsets_mutex.unlock();
+    void *data_log = malloc(sizeof(char) * h->data_len);
+
+    do_read_resp = do_read(fs, index, data_log, h->data_len, h->hdr_len, false);
+    if (do_read_resp < 0)
+        return -1;
+    cache_mutex.lock();
+    meta_log_cache[index] = h;
+    data_log_cache[index] = data_log;
+    meta_log_cache_sizes[index] = h->hdr_len;
+    data_log_cache_sizes[index] = h->data_len;
+    fifo_queue.push(index);
+    fifo_size++;
+    fifo_cv.notify_all();
+    cache_mutex.unlock();
+
+    memcpy(buf, data_log + offset, len);
+    return do_read_resp;
 }
 
 static std::vector<std::string> split(const std::string& s, char delimiter)
@@ -1448,10 +1497,10 @@ int fs_write(const char *path, const char *buf, size_t len,
     int inum;
     inode_mutex.lock_shared(); // TODO: 1469: std::unique_lock lk(inode_mutex);
                                //       1481: lk.unlock();
-    /*if (fi->fh != 0) {   TODO: bring this mechanism back
+    /*if (fi->fh != 0) {   //TODO: bring this mechanism back
         inum = fi->fh;
-    } else {*/
-        inum = path_2_inum(path);
+    } else {
+        */inum = path_2_inum(path);
     //}
     if (inum < 0){
         inode_mutex.unlock_shared();
@@ -2079,8 +2128,8 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     inode_mutex.lock_shared();
     /*if (fi->fh != 0) {
         inum = fi->fh;
-    } else {*/
-        inum = path_2_inum(path);
+    } else {
+        */inum = path_2_inum(path);
     //}
 
     if (inum < 0){
@@ -2260,7 +2309,7 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 
 // TODO: enable fifo to store old data that's recently read
 void fifo() {
-    int fifo_limit = 1000;
+    int fifo_limit = 10;
     std::unique_lock lk(fifo_mutex);
     while (true) {
         if (quit_fifo) {
@@ -2268,14 +2317,14 @@ void fifo() {
                 int index = fifo_queue.front();
                 fifo_queue.pop();
                 fifo_size--;
-                old_log_mutex.lock();
-                free(meta_log_buffer[index]);
-                free(data_log_buffer[index]);
-                meta_log_buffer.erase(index);
-                data_log_buffer.erase(index);
-                meta_log_sizes.erase(index);
-                data_log_sizes.erase(index);
-                old_log_mutex.unlock();
+                cache_mutex.lock();
+                free(meta_log_cache[index]);
+                free(data_log_cache[index]);
+                meta_log_cache.erase(index);
+                data_log_cache.erase(index);
+                meta_log_cache_sizes.erase(index);
+                data_log_cache_sizes.erase(index);
+                cache_mutex.unlock();
             }
             quit_fifo = false;
             cv.notify_all();
@@ -2287,14 +2336,14 @@ void fifo() {
             int index = fifo_queue.front();
             fifo_queue.pop();
             fifo_size--;
-            old_log_mutex.lock();
-            free(meta_log_buffer[index]);
-            free(data_log_buffer[index]);
-            meta_log_buffer.erase(index);
-            data_log_buffer.erase(index);
-            meta_log_sizes.erase(index);
-            data_log_sizes.erase(index);
-            old_log_mutex.unlock();
+            cache_mutex.lock();
+            free(meta_log_cache[index]);
+            free(data_log_cache[index]);
+            meta_log_cache.erase(index);
+            data_log_cache.erase(index);
+            meta_log_cache_sizes.erase(index);
+            data_log_cache_sizes.erase(index);
+            cache_mutex.unlock();
         }
     }
 }
@@ -2619,9 +2668,9 @@ void *fs_init(struct fuse_conn_info *conn)
 
     // initialization - FIXME
     meta_log_len = 2 * 64 * 1024;
-    meta_log_head = meta_log_tail = malloc(meta_log_len*4);
+    meta_log_head = meta_log_tail = malloc(meta_log_len*2);
     data_log_len = 2 * 8 * 1024 * 1024;
-    data_log_head = data_log_tail = malloc(data_log_len*4);  // TODO: what length? Was *2 previously
+    data_log_head = data_log_tail = malloc(data_log_len*2);  // TODO: what length? Was *2 previously
 
     fs->s3 = new s3_target(fs->host, fs->bucket, fs->access, fs->secret, false);
 
@@ -2710,11 +2759,11 @@ void *fs_init(struct fuse_conn_info *conn)
 
     started_gc = false;
     // TODO: Only libobjfs inits set reserved[0] to 9, this prevents objfs-mount from starting the checkpointing thread and makes testing easier (for now)
-    //if (conn->reserved[0] == 9) {
+    if (conn->reserved[0] == 9) {
         std::thread(fifo).detach();
         std::thread (checkpoint_timer, fs).detach();
         std::thread (gc_timer, fs).detach();
-    //}
+    }
 
     return (void*) fs;
 }
@@ -2730,7 +2779,7 @@ void fs_teardown(void *foo)
 
     {
         std::unique_lock<std::mutex> lk(cv_m);
-        cv.wait(lk, []{return (!quit_ckpt)&&(!quit_fifo)&&(!quit_gc);});
+        cv.wait(lk, []{return (!quit_fifo)&&(!quit_ckpt)&&(!quit_gc);});
         printf("quit ckpter & fifo & gc finished in fs_teardown\n");
     }
     const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
