@@ -93,6 +93,7 @@ std::atomic<int> fifo_size (0);
 std::atomic<int> next_s3_index (1);
 std::atomic<int> next_inode (3); // the root "" has inum 2
 std::atomic<int> ckpt_index (-1); // record the latest checkpoint object index
+int f_bsize = 4096;
 
 std::mutex next_inode_mutex;
 
@@ -103,13 +104,13 @@ std::map<int, size_t> meta_log_buffer_sizes;
 std::map<int, size_t> data_log_buffer_sizes;
 
 // Read Cache
-std::map<int, void *> meta_log_cache;
-std::map<int, void *> data_log_cache;
-std::map<int, size_t> meta_log_cache_sizes; 
-std::map<int, size_t> data_log_cache_sizes;
+//std::map<int, void *> meta_log_cache;
+std::map<int, std::map<int, void *> *> data_log_cache;
+//std::map<int, size_t> meta_log_cache_sizes; 
+std::map<int, std::map<int, size_t> *> data_log_cache_sizes;
 
 std::map<int, void *> written_inodes;
-std::queue<int> fifo_queue;
+std::queue<std::pair<int, int> *> fifo_queue;
 std::map<int, std::map<int, int> *> writes_after_ckpt;  // first key is inum, second key is offset, value is len
 std::map<int, int> truncs_after_ckpt;  // first key is inum, second key means fs_truncate off_t len
 std::map<int, int> file_stale_data;
@@ -1323,49 +1324,107 @@ int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
         return len;
     }
     buffer_mutex.unlock_shared();
+
+    int data_len = get_datalen(fs, index, false);
+    int hdr_len = get_offset(fs, index, false);
+
+    if (offset + len > data_len) return -1;
+    
+    std::set<int> empty_extent_offsets;
+    std::map<int, void *> *data_extents;
+    //TODO: locking?
     cache_mutex.lock_shared();
     if (data_log_cache.find(index) != data_log_cache.end()) {
-        len = std::min(len, data_log_cache_sizes[index] - offset);
-        memcpy(buf, offset + (char*)data_log_cache[index], len);
-        cache_mutex.unlock_shared();
-        return len;
+        data_extents = data_log_cache[index];
+        auto it = data_extents->lower_bound(offset);
+        if (it == data_extents->begin() && it->first > offset) {
+            int first_ext_offset = it->first;
+            while (first_ext_offset > offset) {
+                first_ext_offset -= f_bsize;
+                empty_extent_offsets.insert(first_ext_offset);
+            }
+        }
+        int next_ext_offset = it->first;
+        while (next_ext_offset < offset + len) {
+            if (data_extents->find(next_ext_offset) == data_extents->end()) {
+                empty_extent_offsets.insert(next_ext_offset);
+            }
+            next_ext_offset += f_bsize;
+        }
+    } else {
+        int div = (int)offset / f_bsize;
+
+        while (div * f_bsize < offset + len) {
+            empty_extent_offsets.insert(div * f_bsize);
+            div++;
+        }
+        data_extents = new std::map<int, void *>;
+        data_log_cache[index] = data_extents;
     }
     cache_mutex.unlock_shared();
-    struct obj_header *h = (struct obj_header*)malloc(sizeof(obj_header));
-    int do_read_resp = do_read(fs, index, (void *)h, sizeof(obj_header), 0, false);
+    
+
+    if (empty_extent_offsets.size() == 0) {
+        auto it = data_extents->lower_bound(offset);
+        void *cur_ext;
+        if (it->first > offset) {
+            it--;
+            cur_ext = it->second;
+            memcpy(buf, cur_ext + offset - it->first, it->first + f_bsize - offset);
+            buf += it->first + f_bsize - offset;
+            it++;
+        }
+        while (it->first + f_bsize <= offset + len) {
+            cur_ext = it->second;
+            memcpy(buf, cur_ext, f_bsize);
+            buf += f_bsize;
+            it++;
+        }
+        if (it->first < offset + len) {
+            cur_ext = it->second;
+            memcpy(buf, cur_ext, offset + len - it->first);
+        }
+        return len;
+    }
+
+    void *data_log = malloc(sizeof(char) * data_len);
+    
+    int do_read_resp = do_read(fs, index, data_log, data_len, hdr_len, false);
     if (do_read_resp < 0)
         return -1;
-
-    data_offsets_mutex.lock();
-    data_offsets[index] = h->hdr_len;
-    data_offsets_mutex.unlock();
-    data_lens_mutex.lock();
-    data_lens[index] = h->data_len;
-    data_lens_mutex.unlock();
-    void *data_log = malloc(sizeof(char) * h->data_len);
-    //int data_len = get_datalen(fs, index, false);
-    //int hdr_len = get_offset(fs, index, false);
-    //void *data_log = malloc(sizeof(char) * data_len);
-
-    do_read_resp = do_read(fs, index, data_log, h->data_len, h->hdr_len, false);
-    //do_read_resp = do_read(fs, index, data_log, data_len, hdr_len, false);
-    if (do_read_resp < 0)
-        return -1;
+    
     cache_mutex.lock();
-    meta_log_cache[index] = h;
-    data_log_cache[index] = data_log;
-    meta_log_cache_sizes[index] = h->hdr_len;
-    data_log_cache_sizes[index] = h->data_len;
-    fifo_queue.push(index);
+    //std::map<int, void *> *data_extents;
+    data_extents = data_log_cache[index];
+
+    int n;
+    for(std::set<int>::iterator it = empty_extent_offsets.begin(); it != --empty_extent_offsets.end(); ++it) {
+        n = *it;
+        void *cur_ext = malloc(sizeof(char) * f_bsize);
+        memcpy(cur_ext, data_log + n, f_bsize);
+        (*data_extents)[n] = cur_ext;
+        std::pair <int, int>* fifo_entry = new std::pair<int, int>;
+        fifo_entry->first = index;
+        fifo_entry->second = n; 
+        fifo_queue.push(fifo_entry);
+        fifo_size++;
+    }
+    n = *empty_extent_offsets.rbegin();
+    void *cur_ext = malloc(offset + len - n);
+    memcpy(cur_ext, data_log + n, offset + len - n);
+    (*data_extents)[n] = cur_ext;
+    std::pair <int, int>* fifo_entry = new std::pair<int, int>;
+    fifo_entry->first = index;
+    fifo_entry->second = n; 
+    fifo_queue.push(fifo_entry);
     fifo_size++;
     fifo_cv.notify_all();
     cache_mutex.unlock();
 
-    if (offset + len > h->data_len)
-        return -1;
-
     memcpy(buf, data_log + offset, len);
-    return do_read_resp;
+
+    free(data_log);
+    return len;
 }
 
 static std::vector<std::string> split(const std::string& s, char delimiter)
@@ -2325,7 +2384,7 @@ int fs_readlink(const char *path, char *buf, size_t len)
  */
 int fs_statfs(const char *path, struct statvfs *st)
 {
-    st->f_bsize = 4096;
+    st->f_bsize = f_bsize;
     st->f_blocks = 0;
     st->f_bfree = 0;
     st->f_bavail = 0;
@@ -2358,19 +2417,23 @@ void fifo() {
     std::unique_lock lk(fifo_mutex);
     while (true) {
         if (quit_fifo) {
+            cache_mutex.lock();
             while (fifo_size > 0) {
-                int index = fifo_queue.front();
+                std::pair<int, int> *pair = fifo_queue.front();
+                free(pair);
                 fifo_queue.pop();
                 fifo_size--;
-                cache_mutex.lock();
-                free(meta_log_cache[index]);
-                free(data_log_cache[index]);
-                meta_log_cache.erase(index);
-                data_log_cache.erase(index);
-                meta_log_cache_sizes.erase(index);
-                data_log_cache_sizes.erase(index);
-                cache_mutex.unlock();
             }
+            for (auto it = data_log_cache.begin(); it != data_log_cache.end(); it++) {
+                auto [objnum, data_extents] = *it;
+                for (auto it2 = data_extents->begin(); it2 != data_extents->end(); it2++) {
+                    auto [offset, extent] = *it;
+                    free(extent);
+                }
+                data_extents->clear();
+            }
+            data_log_cache.clear();
+            cache_mutex.unlock();
             quit_fifo = false;
             cv.notify_all();
             printf("quit fifo\n");
@@ -2378,16 +2441,16 @@ void fifo() {
         }
         fifo_cv.wait(lk, [&fifo_limit]{return (fifo_size.load() > fifo_limit)||quit_fifo;});
         while (fifo_size > fifo_limit) {
-            int index = fifo_queue.front();
+            cache_mutex.lock();
+            std::pair<int, int> *pair = fifo_queue.front();
+            int objnum = pair->first;
+            int offset = pair->second;
+            free(pair);
             fifo_queue.pop();
             fifo_size--;
-            cache_mutex.lock();
-            free(meta_log_cache[index]);
-            free(data_log_cache[index]);
-            meta_log_cache.erase(index);
-            data_log_cache.erase(index);
-            meta_log_cache_sizes.erase(index);
-            data_log_cache_sizes.erase(index);
+
+            free((*data_log_cache[objnum])[offset]);
+            data_log_cache[objnum]->erase(offset);
             cache_mutex.unlock();
         }
     }
@@ -2506,7 +2569,7 @@ void gc_write(struct objfs *fs, void *buf, size_t len, int inum, int file_offset
             started_gc_mutex.unlock_shared();
             return;
         }
-        if (t_len < file_offset + len) {
+        if (t_len < file_offset + (int)len) {
             len = t_len - file_offset;
         }
     }
@@ -2521,7 +2584,7 @@ void gc_write(struct objfs *fs, void *buf, size_t len, int inum, int file_offset
             w_len = it->second;
 
             if (w_offset + w_len <= file_offset) continue;
-            if (w_offset >= file_offset + len) break;
+            if (w_offset >= file_offset + (int)len) break;
             int skip = w_offset + w_len - file_offset;
             if (w_offset <= file_offset) {
                 buf = (void *)buf + skip;
@@ -2740,6 +2803,8 @@ void *fs_init(struct fuse_conn_info *conn)
     struct objfs *fs = (objfs *)malloc(sizeof(objfs));
     fs = (objfs *) fuse_get_context()->private_data;
     const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
+
+    f_bsize = 4096;
 
     // initialization - FIXME
     meta_log_len = 2 * 64 * 1024;
