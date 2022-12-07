@@ -1189,6 +1189,8 @@ void write_everything_out(struct objfs *fs)
     buffer_mutex.lock();
     free(meta_log_buffer[index]);
     free(data_log_buffer[index]);
+    data_log_buffer[index] = NULL;
+    meta_log_buffer[index] = NULL;
     meta_log_buffer.erase(index);
     data_log_buffer.erase(index);
     meta_log_buffer_sizes.erase(index);
@@ -1332,76 +1334,79 @@ int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
     
     std::set<int> empty_extent_offsets;
     std::map<int, void *> *data_extents;
-    //TODO: locking?
+
     cache_mutex.lock_shared();
     if (data_log_cache.find(index) != data_log_cache.end()) {
         data_extents = data_log_cache[index];
-        auto it = data_extents->lower_bound(offset);
-        if (it == data_extents->begin() && it->first > offset) {
-            int first_ext_offset = it->first;
-            while (first_ext_offset > offset) {
-                first_ext_offset -= f_bsize;
-                empty_extent_offsets.insert(first_ext_offset);
+        int cur_ext_offset = ((int)offset / f_bsize) * f_bsize;
+
+        while (cur_ext_offset < offset + len) {
+            if (data_extents->find(cur_ext_offset) == data_extents->end()) {
+                empty_extent_offsets.insert(cur_ext_offset);
             }
-        }
-        int next_ext_offset = it->first;
-        while (next_ext_offset < offset + len) {
-            if (data_extents->find(next_ext_offset) == data_extents->end()) {
-                empty_extent_offsets.insert(next_ext_offset);
-            }
-            next_ext_offset += f_bsize;
+            cur_ext_offset += f_bsize;
         }
     } else {
-        int div = (int)offset / f_bsize;
+        int cur_ext_offset = ((int)offset / f_bsize) * f_bsize;
 
-        while (div * f_bsize < offset + len) {
-            empty_extent_offsets.insert(div * f_bsize);
-            div++;
+        while (cur_ext_offset < offset + len) {
+            empty_extent_offsets.insert(cur_ext_offset);
+            cur_ext_offset += f_bsize;
         }
         data_extents = new std::map<int, void *>;
         data_log_cache[index] = data_extents;
     }
-    cache_mutex.unlock_shared();
     
-
+    int cur_ext_read_size;
     if (empty_extent_offsets.size() == 0) {
-        auto it = data_extents->lower_bound(offset);
-        void *cur_ext;
-        if (it->first > offset) {
-            it--;
-            cur_ext = it->second;
-            memcpy(buf, cur_ext + offset - it->first, it->first + f_bsize - offset);
-            buf += it->first + f_bsize - offset;
-            it++;
-        }
-        while (it->first + f_bsize <= offset + len) {
+        int bytes_read = 0;
+        int cur_ext_offset = ((int)offset / f_bsize) * f_bsize;
+        auto it = data_extents->find(cur_ext_offset);
+        void *cur_ext = it->second;
+        cur_ext_read_size = std::min(cur_ext_offset + f_bsize - (int)offset, (int)len);
+        memcpy(buf, cur_ext + offset - cur_ext_offset, cur_ext_read_size);
+        buf += cur_ext_read_size;
+        len -= cur_ext_read_size;
+        bytes_read += cur_ext_read_size;
+        
+        while (len >= f_bsize) {
+            //TODO: change it to iterator
+            cur_ext_offset += f_bsize;
+            it = data_extents->find(cur_ext_offset);
             cur_ext = it->second;
             memcpy(buf, cur_ext, f_bsize);
             buf += f_bsize;
-            it++;
+            len -= f_bsize;
+            bytes_read += f_bsize;
         }
-        if (it->first < offset + len) {
+        if (len > 0) {
+            cur_ext_offset += f_bsize;
+            it = data_extents->find(cur_ext_offset);
             cur_ext = it->second;
-            memcpy(buf, cur_ext, offset + len - it->first);
+            memcpy(buf, cur_ext, len);
+            bytes_read += len;
         }
-        return len;
+        cache_mutex.unlock_shared();
+        return bytes_read;
     }
+    cache_mutex.unlock_shared();
 
     void *data_log = malloc(sizeof(char) * data_len);
     
     int do_read_resp = do_read(fs, index, data_log, data_len, hdr_len, false);
-    if (do_read_resp < 0)
+    if (do_read_resp < 0){
         return -1;
+    }
     
     cache_mutex.lock();
-    //std::map<int, void *> *data_extents;
-    data_extents = data_log_cache[index];
 
     int n;
-    for(std::set<int>::iterator it = empty_extent_offsets.begin(); it != --empty_extent_offsets.end(); ++it) {
+    void *cur_ext;
+    for(std::set<int>::iterator it = empty_extent_offsets.begin(); it != empty_extent_offsets.end(); ++it) {
         n = *it;
-        void *cur_ext = malloc(sizeof(char) * f_bsize);
-        memcpy(cur_ext, data_log + n, f_bsize);
+        int cur_ext_write_size = std::min(data_len - n, f_bsize);
+        cur_ext = malloc(sizeof(char) * f_bsize);
+        memcpy(cur_ext, data_log + n, cur_ext_write_size);
         (*data_extents)[n] = cur_ext;
         std::pair <int, int>* fifo_entry = new std::pair<int, int>;
         fifo_entry->first = index;
@@ -1409,21 +1414,13 @@ int read_data(struct objfs *fs, void *buf, int index, off_t offset, size_t len)
         fifo_queue.push(fifo_entry);
         fifo_size++;
     }
-    n = *empty_extent_offsets.rbegin();
-    void *cur_ext = malloc(offset + len - n);
-    memcpy(cur_ext, data_log + n, offset + len - n);
-    (*data_extents)[n] = cur_ext;
-    std::pair <int, int>* fifo_entry = new std::pair<int, int>;
-    fifo_entry->first = index;
-    fifo_entry->second = n; 
-    fifo_queue.push(fifo_entry);
-    fifo_size++;
     fifo_cv.notify_all();
     cache_mutex.unlock();
 
     memcpy(buf, data_log + offset, len);
 
     free(data_log);
+    data_log = NULL;
     return len;
 }
 
@@ -2413,7 +2410,7 @@ int fs_fsync(const char * path, int, struct fuse_file_info *fi)
 
 // TODO: enable fifo to store old data that's recently read
 void fifo() {
-    int fifo_limit = 100;
+    int fifo_limit = 1000000;
     std::unique_lock lk(fifo_mutex);
     while (true) {
         if (quit_fifo) {
@@ -2421,14 +2418,16 @@ void fifo() {
             while (fifo_size > 0) {
                 std::pair<int, int> *pair = fifo_queue.front();
                 free(pair);
+                pair = NULL;
                 fifo_queue.pop();
                 fifo_size--;
             }
             for (auto it = data_log_cache.begin(); it != data_log_cache.end(); it++) {
                 auto [objnum, data_extents] = *it;
                 for (auto it2 = data_extents->begin(); it2 != data_extents->end(); it2++) {
-                    auto [offset, extent] = *it;
-                    free(extent);
+                    auto [offset, ext] = *it2;
+                    free(ext);
+                    ext = NULL;
                 }
                 data_extents->clear();
             }
@@ -2446,10 +2445,12 @@ void fifo() {
             int objnum = pair->first;
             int offset = pair->second;
             free(pair);
+            pair = NULL;
             fifo_queue.pop();
             fifo_size--;
 
             free((*data_log_cache[objnum])[offset]);
+            (*data_log_cache[objnum])[offset] = NULL;
             data_log_cache[objnum]->erase(offset);
             cache_mutex.unlock();
         }
@@ -2647,14 +2648,15 @@ void gc_write_extent(void *buf, int inum, int file_offset, int len) {
 }
 
 //void gc_read_write(struct objfs *fs, int objnum, std::vector<gc_info *> *infos){
-void gc_read_write(struct objfs *fs, int filenum, std::vector<gc_info *> *infos, std::set<int> &objnum_to_delete){
+void gc_read_write(struct objfs *fs, int filenum, void *infos_ptr, std::set<int> *objnum_to_delete){
+    std::vector<gc_info *> *infos = (std::vector<gc_info *> *)infos_ptr;
     if (infos == NULL || infos->size() == 0) return;
     for (auto it = infos->begin(); it != infos->end(); it++) {
         gc_info *info = *it;
-        if (objnum_to_delete.find(info->objnum) == objnum_to_delete.end()) continue;
+        //if (objnum_to_delete == NULL || objnum_to_delete->size()==0) break;
+        if (objnum_to_delete->find(info->objnum) == objnum_to_delete->end()) continue;
         char buf[info->len];
         read_data(fs, (void *)buf, info->objnum, info->obj_offset, info->len);
-        //do_read(fs, info->objnum, buf, info->len, info->obj_offset + get_offset(fs, info->objnum, false), false);
         gc_write(fs, (void *)buf, info->len, filenum, info->file_offset);
     }
 }
@@ -2711,7 +2713,6 @@ void gc_obj(struct objfs *fs, int ckpted_s3_index){
 
     int n;
     char postfix[10];
-    //std::vector<int> objnum_to_delete;
     std::set<int> objnum_to_delete;
 
     for (auto it = keys.begin(); it != keys.end(); it++) {
@@ -2728,17 +2729,17 @@ void gc_obj(struct objfs *fs, int ckpted_s3_index){
         if (util_rate > 0.8) {
             continue;
         }
-        //gc_read_write(fs, n, gc_infos[n]);
-        //objnum_to_delete.push_back(n);
         objnum_to_delete.insert(n);
         printf("OBJECT %s to be deleted\n", it->c_str());
     }
 
-    for (auto it = gc_infos.begin(); it != gc_infos.end(); it++) {
-        int filenum = it->first;
-        std::vector<gc_info*>* infos = it->second;
-        gc_read_write(fs, filenum, infos, objnum_to_delete);
-        printf("FILE %d to be GCed\n", filenum);
+    if (objnum_to_delete.size() > 0) {
+        for (auto it = gc_infos.begin(); it != gc_infos.end(); it++) {
+            int filenum = it->first;
+            std::vector<gc_info*>* infos = it->second;
+            gc_read_write(fs, filenum, (void *)infos, &objnum_to_delete);
+            printf("FILE %d to be GCed\n", filenum);
+        }
     }
 
     started_gc_mutex.lock();
@@ -2777,26 +2778,6 @@ void gc_obj(struct objfs *fs, int ckpted_s3_index){
     }
     printf("GC obj finished\n");
 }
-
-/*void gc_file(struct objfs *fs){
-
-    int root_inum = 2;
-
-
-    log_mutex.lock();
-    if (data_offset() != 0 && meta_offset() != 0) {
-        {
-            std::unique_lock<std::mutex> sync_lk(sync_mutex);
-            writing_log_count++;
-        }
-        printf("Additional GC write everything out\n");
-        write_everything_out(fs);
-    } else {
-        log_mutex.unlock();
-    }
-
-    printf("GC file finished\n");
-}*/
 
 void *fs_init(struct fuse_conn_info *conn)
 {
@@ -2899,11 +2880,11 @@ void *fs_init(struct fuse_conn_info *conn)
 
     started_gc = false;
     // TODO: Only libobjfs inits set reserved[0] to 9, this prevents objfs-mount from starting the checkpointing thread and makes testing easier (for now)
-    if (conn->reserved[0] == 9) {
+    //if (conn->reserved[0] == 9) {
         std::thread(fifo).detach();
         std::thread (checkpoint_timer, fs).detach();
         std::thread (gc_timer, fs).detach();
-    }
+    //}
 
     return (void*) fs;
 }
