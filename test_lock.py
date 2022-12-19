@@ -62,7 +62,7 @@ class tests(unittest.TestCase):
                                     msg='readdir %s: %d results (should be 0)' % (path, len(des)))
         print("quit id: " + str(tid))
     
-    def test_01_mkdir(self):
+    '''def test_01_mkdir(self):
         print('Test 1, mkdir (top level):')
 
         obj.init(prefix)
@@ -105,7 +105,7 @@ class tests(unittest.TestCase):
                 self.assertOK(v, 'readdir %s' % path)
                 self.assertEqual(len(des), 0,
                                     msg='readdir %s: %d results (should be 0)' % (path, len(des)))
-        obj.teardown()
+        obj.teardown()'''
 
     def do_write(self, path, filesz, opsz):
         v = obj.create(path, 0o777)
@@ -181,6 +181,7 @@ class tests(unittest.TestCase):
         obj.teardown()
         print("TEARDOWN!\n")
         time.sleep(5)
+        
         obj.init(prefix)
         print("INIT!")
         
@@ -209,7 +210,7 @@ if __name__ == '__main__':
     except OSError(e):
         pass
 
-    obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 1*1024*1024)
+    obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 262144, 2000)
     #obj.init(prefix)
     unittest.main()
     

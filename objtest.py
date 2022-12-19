@@ -186,8 +186,8 @@ def write(path, data, offset):
         raise AssertionError(stacktrace())
     return val
 
-def set_context(bucket, access_key, secret_key, host, size):
-    lib.set_objectfs_context(xbytes(bucket), xbytes(access_key), xbytes(secret_key), xbytes(host), c_int(size))
+def set_context(bucket, access_key, secret_key, host, chunksize, cachesize):
+    lib.set_objectfs_context(xbytes(bucket), xbytes(access_key), xbytes(secret_key), xbytes(host), c_int(chunksize), c_int(cachesize))
 
 def sync():
     lib.py_sync()

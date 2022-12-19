@@ -295,7 +295,7 @@ void py_teardown()
 }
 
 
-void set_objectfs_context(char *bucket, char *access_key, char *secret_key, char *host, size_t size) {
+void set_objectfs_context(char *bucket, char *access_key, char *secret_key, char *host, int chunksize, int cachesize) {
     struct objfs *fs = malloc (sizeof (struct objfs));
     fs->bucket = strdup(bucket);
     //fs->prefix = strdup(prefix);
@@ -303,7 +303,8 @@ void set_objectfs_context(char *bucket, char *access_key, char *secret_key, char
     fs->access = strdup(access_key);
     fs->secret = strdup(secret_key);
     fs->use_local = 0;
-    fs->chunk_size = size;
+    fs->chunk_size = chunksize;
+    fs->cache_size = cachesize;
     /*struct objfs fs = { .bucket = bucket, .prefix = prefix,
         .host = host, .access = access_key,
         .secret = secret_key, .use_local = 0,

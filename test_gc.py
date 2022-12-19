@@ -218,7 +218,7 @@ if __name__ == '__main__':
     except OSError(e):
         pass
 
-    obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 1*1024*1024)
+    obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 262144, 2000)
     #obj.init(prefix)
     unittest.main()
     
