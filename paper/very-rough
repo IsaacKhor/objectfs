@@ -1,0 +1,148 @@
+We describe what may be a novel file system organization, combining (a) log structure, (b) logical journaling, and (c) separation of metadata from file structure.
+Its unique combination of existing mechanisms persists file system actions in real time via logical journaling, while allowing a tradeoff between the overhead of metadata updates and log recovery time after failure.
+
+It has been designed to be a single-client remote file system over write-once object systems such as S3, e.g. for use with container systems such as Docker, and uses a unique metadata structure to support not only cloning and snapshots but a native overlay mechanism.
+It may also be adapted for use with block devices, using either garbage collection or "hole-plugging" with a bitmap allocator.
+
+We describe the principles behind this file system, and present experimental results from an early FUSE prototype.
+
+----
+
+Nowadays the term "network file system" is assumed to imply a multi-client shared file system.
+However with the rise of container management services there is a growing need for single-client file systems where data is stored remotely, which is the specific use case targeted by our work.
+Conceptually it is a local file system running over remote storage, but unlike traditional file systems, that remote storage is an object store rather than a remote block device.
+[we note that there is an existing closed-source multi-client file system using S3 as a storage backend, however its mechanisms have not been publicly disclosed and are not known to the authors.]
+
+ObjectFS is based on the following principles:
+1 - logical journaling combined with a log-structured file system
+2 - separation of metadata from file system contents
+3 - overlaying or "patching" of directories and files
+
+example:
+---
+P1: "this is a test\n"
+Figure: Single ObjectFS record (i.e. object) recording creation of "/file.txt" (root=inode 10) and write of 15 bytes.
+
+We explain ObjectFS in stages, starting with the simplest example with a single file stored in a single object, as seen in Figure~\ref{fig1}.
+The object is split into two sections: the header, containing a logical journal, and the data section, containing bytes written to files.
+Each object has a 64-bit sequence number, which is used as the suffix of the object name.
+
+[in our current design, sequence numbers and inode numbers are never re-used. Minor savings might be possible if they were wrapped around at less than 64 bits]
+
+In the figure the object header records two operations: (1) the creation of inode 11, a file with the name "file.txt" in the root directory (inode 10), and (b) the write of 15 bytes to that file at offset 0; the actual bytes written are found within the body of the object.
+This single object is in fact a complete (although nearly empty) ObjectFS file system.
+On startup we can scan the headers of all objects in sequence - i.e. just that one.
+We build structures in memory for for each file system object, reachable by inode number; in addition to owner/permissions/etc., directories hold a map from names to inode numbers, while a file holds a map from offset ranges within the file to specific data objects and locations within those objects.
+
+In our single-object file system we'll have two objects, identified by inode number - inode 10, the root directory, and inode 11, "/file.txt".
+Inode 10 will identify a directory object with a single entry ("file.txt" -> 11), while inode 11 will identify a file object mapping bytes 0..14 to object \#1 starting at data offset 0.
+Metadata operations (readdir, stat, path traversal) would complete using only in-memory data; a read of "/file.txt" would require fetching data from the object itself.
+
+[object 2 - mkdir "/dir1", pwrite(/file.txt, 15, len=25,"and this is another test\n"]
+
+In Figure X we see the file system after two more operations: creation of the directory "/dir1", and appending another 25 bytes to "/file.txt".
+Mounting this would involve scanning both object headers, resulting in the root directory holding two entries, and the "/file.txt" object containing a map with two extents, one indicating 15 bytes in object 1, while the second points to 25 bytes in object 2.
+
+We note that the objects shown above are tiny for illustrative purposes.
+In practice most file data would be written in 4K pages or larger, and both data and metadata would be buffered and written out in larger batches.
+To prevent loss of buffered data and operations in the case of failure it can be logged to local SSD.
+
+As files are overwritten or deleted, the data stored in older objects will become outdated and a garbage collection process will be needed.
+We can keep track of the utilization of each object in memory, decrementing it whenever an extent in that object is overwritten or the file is deleted.
+The garbage collection logic then identifies objects to clean, and retrieves and rewrites any remaining live data from these objects before deleting them.
+
+
+<<<< put this later
+we retrieve the object header and get the list of inode extents originally stored in that object; we can then look up the current mapping for that range of the file to determine if the data is still live and needs to be copied before object deletion.
+<<<<
+
+[picture - in-memory data structure]
+
+[figure 2 - simple checkpoint - see text]
+
+[figure X - picture of checkpoint with offsets]
+
+As additional objects are created, due to either creation and writing of new files or the updating of existing ones, scanning all object headers at mount time will eventually become impractical.
+We solve this by periodically dumping the in-memory metadata to a checkpoint object, as shown in Figure X; startup can now be performed by reading the most recent checkpoint object and then scanning any newer object headers.
+
+Up to this point we have assumed that all file system metadata --- inodes, directories, and file extent maps --- is held in memory and accessed there when necessary.
+For larger file systems we will want to be able to limit the amount of data which must be held in memory, leading to the structure shown in Figure X.
+In each directory entry we indicate not only the inode to which it maps, but the byte offset and length of where the full object (including dirents or file extent list) may be found in the checkpoint.
+When traversing a path, if we reach an object which is not resident in memory, this information will allow it to be demand-loaded, and the operation may then continue as if all information had been memory-resident.
+
+We note that although this structure efficiently supports path traversal for normal file and directory access, it does not provide an efficient mechanism for mapping an inode number to a file or directory.
+In particular an objectfs inode number does not correspond to a location, but is merely an opaque identify; in the prototype we use a 64-bit sequence number to generate unique inodes.
+This poses a problem for garbage collection, as it is necessary to identify live data in an object before deleting it, a task which is typically done by looking up the current mapping for a region to see if the mapping has changed.
+(e.g. in our simple example, before deleting object 1 we would look up the offset range [0..14] in "/file1.txt", to determine whether it still points to the same region in object 1)
+We solve this by adding a table to the metadata checkpoint, mapping inode numbers to locations within the checkpoint.
+
+[split checkpoint file]
+
+As the file system grows even larger, the overhead of writing a single checkpoint containing all file system metadata increases; at the same time the number of updates over which this is amortized remains constant, as that is determined by mount time considerations.
+
+The solution is shown in Figure X, where pointers are extended to indicate the object in which the data may be found.
+Thus if a directory is updated, a new copy of the directory can be stored in the next checkpoint, but entries pointing to unmodified files or subdirectories will refer to locations in older checkpoint files.
+File or directory metadata in memory is marked as dirty whenever modifications are made, and written out in the next checkpoint.
+As these checkpoint objects accumulate, some form of garbage collection will be needed.
+We are looking at using a simple FIFO mechanism for this, with a background process which iterates through the file system copying the oldest metadata to the next checkpoint; any checkpoint older than the oldest encountered on the last full traversal may clearly be deleted.
+
+
+File system specifics
+
+ObjectFS supports 4 object types: files, directories, symbolic links, and ``other'', a catchall for devices, pipes, and sockets.
+At present it uses the seven journal entry types shown in Table X.
+These entries are extremely compact, using less than 40 bytes each assuming a mean name length of 16 bytes.
+As a result, metadata-heavy workloads such as small file creation and deletion result in very little I/O---almost all the work is performed in memory, at the time of the operation and possibly a second time if the log is replayed.
+
+
+
+table*: ObjectFS journal entries
+
+Inode: update an inode
+parameters: inum, mode, uid/gid, rdev, mtime
+
+Create: create an object (file/directory/...)
+parameters: parent inum, inum, name
+
+Rename: rename an object
+parameters: inum, parent1 inum, parent2 inum, name1, name2
+
+Truncate:
+parameters: inum, new size
+
+Delete:
+parameters: parent inum, inum, name
+
+Symlink: create a symlink
+parameters: inum, target
+
+Data: write to a file
+parameters: inum, offset/len (in file), offset (in this object), new file size
+
+
+
+-----
+
+
+File system layouts can be categorized in a number of different ways, one of the most significant of which is where they write modified data:
+update-in-place file systems translate multiple overwrites of a file offset into multiple rewrites of the same underlying storage, while copy-on-write [out out-of-place update] file systems allocate new storage locations for every modification.
+
+"Pure" update-in-place file systems such as FFS or ext2 are vulnerable to file system corruption if failures occur during the write process, so modern file systems of this type incorporate \emph{journaling}---a write-ahead log allowing changes to be made atomically.
+
+[say more about out-of-place write]
+
+File system data structures can be classified as \emph{read-optimized} or \emph{write-optimized}, or occasionally both.
+By \emph{read-optimized} we mean structures like the inodes, indirect blocks, and directories of a traditional Unix file system, where any destination may be reached via a combination of indirection and limited searching, i.e. within a directory.
+In contrast, in purely \emph{write-optimized} structures such as a journal there are no pointers or indexes; instead exhaustive search must be used to locate any specific piece of information, for instance the most recent copy of a specific inode.
+Rather than repeatedly searching the journal for different items, we instead examine it once at recovery time and recover an up-to-date view of all information in the journal.
+[ext4-lazy]
+
+Interestingly, few copy-on-write file systems use any form of journaling.
+Instead out-of-place writes are used to create a new read-optimized structure, and then the file system state is atomically shifted to this new structure.
+In [LFS they do .., in WAFL, in ZFS, in Btrfs]
+
+
+
+sharing unmodified portions of the previous version, and without corrupting the previous version of that structure
+ is created, sharing 
+For instance LFS 

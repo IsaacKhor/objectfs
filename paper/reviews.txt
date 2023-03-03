@@ -1,0 +1,154 @@
+[PDF] Submission (459kB) 1 May 2021 6:57:23am EDT 
+
+Abstract
+We present ObFS, a novel log-structured file system designed to use S3-like write-once object storage as its underlying media. It is based on traditional translation layer---rather than file system---mechanisms, using in-memory metadata, logical journaling in out-of-band headers, and periodic metadata checkpoints. ObFS is a single-client file system over remote storage, targeted to containerized applications which typically use block storage for persistent volumes. Its novel structure allows straightforward implementation of snapshots, cloning, and overlays, all highly useful for this use case.
+
+A preliminary FUSE-based implementation is described.
+
+
+M. Abdi, P. Desnoyers [details]
+Topics
+OveMer	RevExp	Nov	WriQua
+Review #32A		1	3	2	2
+Review #32B		1	2	2	2
+Review #32C		2	3	3	3
+Review #32D		3	3	3	2
+Review #32E		2	2	2	3
+You are an author of this submission.
+
+[Edit] Edit submission
+
+[Text] Reviews in plain text
+Review #32A
+Overall merit
+1. 
+Reject
+Reviewer expertise
+3. 
+Published/worked on one or more of this paper's topics
+Novelty
+2. 
+Incremental improvement
+Writing quality
+2. 
+Adequate
+Paper summary
+This paper introduces ObFS, which is a log structured fs designed to be layered on top of S3 object storage systems. The authors present the design, talk about potential features (most of which are yet to be implemented) and say that a prototype exists but has not undergone evaluation.
+Comments for author
+The convergence of object and FS continues to gather attention, and so I thank the authors for starting down this path to see what new advancements can be offered in this space.
+
+Unfortunately this paper covers at some level the 'what' of ObFS...but it completely ignores the 'why' and motivation for any of the work.
+
+There is a lot of work in this area (mostly engineering, but some research ) beyond ObjectiveFS. S3fs, gcsfuse are open-source projects, and "Agni: An Efficient Dual-access File System over Object Storage" was published in hotstorage and SOCC. So at the minimum the authors should investigate the limitations of these systems. Further though, why are they building up an object store to begin with? Cost/availability?
+
+Practically, the design is very high level and missed simple details. What about details around caching or data locally...is there any? Can data be accesed directly or must it use ObFS? (this is a huge demand to not get locked into a FS). How is availability/durability handled...where is the log and what happens when it fails?
+Suggestions for future work
+This paper needs to define its purpose and motivation and do a more widespread survey of the field to understand what has already been accomplished in this area. Is it about cost? is it for ephemeral storage (but then isn't object stores overkill)? what types of apps is it designed to support regarding availability and performance? What is the issue with all the existing ways ob deploying storage? If using Ceph, why not cephfs?
+Review #32B
+Overall merit
+1. 
+Reject
+Reviewer expertise
+2. 
+Familiarity with one or more of this paper's topics
+Novelty
+2. 
+Incremental improvement
+Writing quality
+2. 
+Adequate
+Paper summary
+This paper proposes a novel mechanism for building a file system on top of an object store/key value store, without directly mapping files to objects. It presents a single-client file system and a log-structured design to store file contents.
+Comments for author
+Thank you for submitting to HotStorage. Your paper presents an interesting approach to building a file system on top of object storage that improves over more simplistic approaches in some ways.
+
+However, the paper is missing a few elements that allow it to have more impact. in particular, the paper says very little about when/why this would be used: what are target workloads? What are their storage requirements and access patterns? In addition, the paper doesn't measure the storage cost. By using a log structure, garbage can easily build up that requires extra cost to store. On a local storage device, such garbage takes already-purchased space and has no real dollar cost. In a cloud setting that charges per byte stored, the garbage has a real operation cost to running a file system. Thus, evaluating the space/time overhead of storage is important to evaluating the value of this system.
+
+The paper proposes checkpoints to address the growing logs, but does not prove much hint as to how they affect system operation.
+
+The system relies on in-memory metadata for efficient access, particularly due to the log structure. This is fine, but for containerized systems with limited memory, it is important to evaluate the effect of this cost -- how does it change the cost of using the file system? What is the typical amount of memory required for target workloads?
+
+Finally, while the paper mentions some implementation, there is no evaluation yet. While not required, having some sense of whether the system performs well enough and is useful enough for target workloads is important to understanding the value of this system.
+Suggestions for future work
+The authors are encouraged to figure out concrete use cases where this system is more appropriate than other forms of storage, so that there is some context for design choices.
+Review #32C
+Overall merit
+2. 
+Weak reject
+Reviewer expertise
+3. 
+Published/worked on one or more of this paper's topics
+Novelty
+3. 
+New contribution
+Writing quality
+3. 
+Well-written
+Paper summary
+The paper presents ObFS, a single-client log-structured filesystem on top of remote object-based storage. The work is still at an early stage and the paper only focuses on the basic functionality.
+Comments for author
+Thank you for submitting your work to HotStorage'21. The paper presents a log-structured filesystem on top remote object storage. The idea of logging data and metadata to a stream of objects with each object containing a logical journal of filesystem operations along with the relevant data, is very interesting.
+
+Unfortunately, I felt that the paper lacks motivation - why is a new filesystem needed, how is ObFS better than the alternative solutions? Additionally, given that full system functionality has already been implemented in FUSE, I would expect some preliminary experimentation to demonstrate the potential of the proposed filesystem.
+
+Overall, I think that the paper is at an early stage and needs some more work before getting published.
+
+Other comments for the authors:
+
+An additional figure describing the high level architecture of the system will be helpful to set the scene in the introduction.
+How are the thresholds selected in the hysteresis-based batching?
+Please consider providing a use case example or a reference to justify the usability of the additional features like cloning and overlay.
+It will be interesting to investigate the various overheads involved in ObFS (i.e., translation overhead, garbage collection, recovery time, etc).
+Review #32D
+Overall merit
+3. 
+Weak accept
+Reviewer expertise
+3. 
+Published/worked on one or more of this paper's topics
+Novelty
+3. 
+New contribution
+Writing quality
+2. 
+Adequate
+Paper summary
+ObFS is a single-client, local file system designed to store data and metadata on S3-like write-once object storage. It targets persistent volumes for containerized applications. The implementation relies on a translation layer using in memory metadata, logical journaling, checkpoints.
+Comments for author
+It is interesting to see a paper tackle the topic of how to design a file system differently, tackling the problem of how to access data from an object store.
+
+Section 2: "Metadata is designed to be used in memory, not from storage" -> what is the size of the file system that is targeted by ObFS? Given that the data is kept in memory, there are possible challenges to be dealt with if the size of the file system ends up being large, will the data fit in memory? There is some discussion about this later in the paper, though the topic could require more investigation.
+
+A question is how does ObFS compare to mounting a local file system on top S3, what are the differences in terms of expected performance, data loss, etc?
+
+In general, it would be useful to have a more concrete definition of what is needed from the file system. Is the ability to do snapshot/cloning/overlays the main requirement? What are the performance needs?
+
+Section 2,2: “”Finally an inode table is used to map inode numbers to objects” -> implementation-wise, what is the structure used for the table? Is it an array, are there other structures needed in order to optimize the access to the inodes?
+
+Does the file system support fsck style operations? If so, it would be interesting to see it described.
+
+Misc:
+
+Missing parentheses: “ObFS (like e.g. BeTRFS [3] maintains metadata structures separate from the files themselves, and writes them in a simple serialized format.”
+Suggestions for future work
+more crisp definition of needs
+assess scalability of the file system
+Review #32E
+Overall merit
+2. 
+Weak reject
+Reviewer expertise
+2. 
+Familiarity with one or more of this paper's topics
+Novelty
+2. 
+Incremental improvement
+Writing quality
+3. 
+Well-written
+Paper summary
+The paper proposes ObFS, a log-structured file system implemented on top of the S3 object store. Its design combines log structure with journaling to avoid metadata write-expansions. The proposed system combines a set of appealing (although not novel) features such as supporting clones and overlays.
+Comments for author
+Although the main intuition of the design is reasonable, I expected to see at least a single evaluation experiment against any of the closely related works. For example, "ObjectiveFS" is mentioned in section 4 as the closest related work as it also provides a shared file system on top of S3, however neither a quantitative or a qualitative comparison is provided. Also the authors mention that combining journaling with log structure has only been proposed by "F2FS" and it is limited. However, more recent systems such as "NOVA" (FAST'16) proposed a log-structured file system that also combines 64-bit atomic updates and lightweight journaling. The authors should compare their contribution to such systems.
+Suggestions for future work
+I believe this paper can benefit significantly from showing performance evaluation over ObjectiveFS, F2FS, and NOVA.
