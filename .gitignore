@@ -33,3 +33,6 @@
 
 dir
 dir/*
+
+# Misc
+__pycache__/
