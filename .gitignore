@@ -36,3 +36,8 @@ dir/*
 
 # Misc
 __pycache__/
+
+objfs-mount
+s3.config
+
+secrets.md
