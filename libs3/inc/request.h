@@ -81,7 +81,7 @@ typedef struct RequestParams
     const S3GetConditions *getConditions;
 
     // Start byte
-    off_t startByte;
+    size_t startByte;
 
     // Byte count
     size_t byteCount;

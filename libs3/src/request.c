@@ -401,9 +401,8 @@ static S3Status compose_amz_headers(const RequestParams *params,
         // If byteCount != 0 then we're just copying a range, add header
         if (params->byteCount > 0) {
             char byteRange[S3_MAX_METADATA_SIZE];
-            snprintf(byteRange, sizeof(byteRange), "bytes=%lld-%lld",
-                     (long long)params->startByte,
-                     (long long)params->startByte + params->byteCount);
+            snprintf(byteRange, sizeof(byteRange), "bytes=%zd-%zd",
+                     params->startByte, params->startByte + params->byteCount);
             append_amz_header(values, 0, "x-amz-copy-source-range", byteRange);
         }
         // And the x-amz-metadata-directive header
