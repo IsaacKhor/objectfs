@@ -36,6 +36,7 @@ dir/*
 
 # Misc
 __pycache__/
+.vscode/
 
 objfs-mount
 s3.config

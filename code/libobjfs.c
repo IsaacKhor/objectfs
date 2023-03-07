@@ -1,29 +1,28 @@
 #define FUSE_USE_VERSION 27
 #define _FILE_OFFSET_BITS 64
 
-#include <stdlib.h>
-#include <stddef.h>
-#include <unistd.h>
-#include <stdio.h>
 #include <errno.h>
-#include <sys/stat.h>
 #include <fuse.h>
-//#include <fuse_opt.h>
-#include <string.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
+// #include <fuse_opt.h>
+#include <malloc.h>
 #include <setjmp.h>
 #include <signal.h>
-#include <malloc.h>
+#include <string.h>
 
-#include <libs3.h>
-#include "s3wrap.h"
 #include "objfs.h"
-
+#include "s3wrap.h"
+#include <libs3.h>
 
 extern int fs_getattr(const char *path, struct stat *sb);
 extern int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
                       off_t offset, struct fuse_file_info *fi);
-extern int fs_write(const char *path, const char *buf, size_t len,
-                    off_t offset, struct fuse_file_info *fi);
+extern int fs_write(const char *path, const char *buf, size_t len, off_t offset,
+                    struct fuse_file_info *fi);
 extern int fs_mkdir(const char *path, mode_t mode);
 extern int fs_rmdir(const char *path);
 extern int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi);
@@ -37,7 +36,7 @@ extern int fs_read(const char *path, char *buf, size_t len, off_t offset,
 extern int fs_symlink(const char *path, const char *contents);
 extern int fs_readlink(const char *path, char *buf, size_t len);
 extern int fs_statfs(const char *path, struct statvfs *st);
-extern int fs_fsync(const char * path, int, struct fuse_file_info *fi);
+extern int fs_fsync(const char *path, int, struct fuse_file_info *fi);
 extern int fs_truncate(const char *path, off_t len);
 
 extern struct fuse_operations fs_ops;
@@ -59,15 +58,9 @@ void segv_handler(int sig)
     longjmp(bail_buf, 1);
 }
 
-void set_handler(void)
-{
-    signal(SIGSEGV, segv_handler);
-}
+void set_handler(void) { signal(SIGSEGV, segv_handler); }
 
-void unset_handler(void)
-{
-    return;
-}
+void unset_handler(void) { return; }
 
 struct dirent {
     char name[256];
@@ -96,10 +89,10 @@ int py_getattr(const char *path, struct stat *sb)
     if (setjmp(bail_buf)) {
         unset_handler();
         return 0;
-    }    
+    }
     void *v = malloc(10);
     free(v);
-    //int val = fs_getattr(path, sb);
+    // int val = fs_getattr(path, sb);
     int val = fs_ops.getattr(path, sb);
     unset_handler();
     return val;
@@ -126,7 +119,7 @@ int py_create(const char *path, unsigned int mode, struct fuse_file_info *fi)
     set_handler();
     if (setjmp(bail_buf) == 0) {
         fi->fh = 0;
-	    val = fs_ops.create(path, mode, fi);
+        val = fs_ops.create(path, mode, fi);
     }
     unset_handler();
     return val;
@@ -137,7 +130,7 @@ int py_mkdir(const char *path, unsigned int mode)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-	    val = fs_ops.mkdir(path, mode);
+        val = fs_ops.mkdir(path, mode);
     }
     unset_handler();
     return val;
@@ -148,8 +141,8 @@ int py_truncate(const char *path, unsigned int len)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val = fs_truncate(path, len);
-	val = fs_ops.truncate(path, len);
+        // val = fs_truncate(path, len);
+        val = fs_ops.truncate(path, len);
     }
     unset_handler();
     return val;
@@ -160,8 +153,8 @@ int py_unlink(const char *path)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val = fs_unlink(path);
-	val = fs_ops.unlink(path);
+        // val = fs_unlink(path);
+        val = fs_ops.unlink(path);
     }
     unset_handler();
     return val;
@@ -172,8 +165,8 @@ int py_rmdir(const char *path)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val =  fs_rmdir(path);
-	val =  fs_ops.rmdir(path);
+        // val =  fs_rmdir(path);
+        val = fs_ops.rmdir(path);
     }
     unset_handler();
     return val;
@@ -184,7 +177,7 @@ int py_rename(const char *path1, const char *path2)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val = fs_rename(path1, path2);
+        // val = fs_rename(path1, path2);
         val = fs_ops.rename(path1, path2);
     }
     unset_handler();
@@ -196,7 +189,7 @@ int py_chmod(const char *path, unsigned int mode)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val = fs_chmod(path, mode);
+        // val = fs_chmod(path, mode);
         val = fs_ops.chmod(path, mode);
     }
     unset_handler();
@@ -215,7 +208,7 @@ int py_utime(const char *path, unsigned int actime, unsigned int modtime)
 #endif
 
 int py_read(const char *path, char *buf, unsigned int len, unsigned int offset,
-             struct fuse_file_info *fi)
+            struct fuse_file_info *fi)
 {
     int val = 0;
     set_handler();
@@ -227,15 +220,14 @@ int py_read(const char *path, char *buf, unsigned int len, unsigned int offset,
     return val;
 }
 
-int py_write(const char *path, const char *buf, unsigned int  len,
-              unsigned int offset, struct fuse_file_info *fi)
+int py_write(const char *path, const char *buf, unsigned int len,
+             unsigned int offset, struct fuse_file_info *fi)
 {
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
         fi->fh = 0;
         val = fs_ops.write(path, buf, len, offset, fi);
-
     }
     unset_handler();
     return val;
@@ -246,9 +238,8 @@ int py_statfs(const char *path, struct statvfs *st)
     int val = 0;
     set_handler();
     if (setjmp(bail_buf) == 0) {
-        //val = fs_statfs(path, st);
+        // val = fs_statfs(path, st);
         val = fs_ops.statfs(path, st);
-
     }
     unset_handler();
     return val;
@@ -258,24 +249,24 @@ extern void fs_sync(void);
 void py_sync(void)
 {
     set_handler();
-    if (setjmp(bail_buf) == 0) { 
-        //fs_sync();
+    if (setjmp(bail_buf) == 0) {
+        // fs_sync();
         fs_ops.fsync(0, 0, 0);
     }
     unset_handler();
 }
 
-//extern int fs_initialize(const char *prefix); 
-//extern char *prefix;
-//char prefix_arr[] = "                    ";
-//char *prefix = prefix_arr;
+// extern int fs_initialize(const char *prefix);
+// extern char *prefix;
+// char prefix_arr[] = "                    ";
+// char *prefix = prefix_arr;
 int py_init(const char *_prefix)
 {
 
     int val = 0;
     set_handler();
-    if (setjmp(bail_buf) == 0) { 
-        struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
+    if (setjmp(bail_buf) == 0) {
+        struct objfs *tst_fs = ((struct objfs *)ctx.private_data);
         tst_fs->prefix = strdup(_prefix);
         struct fuse_conn_info info;
         info.reserved[0] = 9;
@@ -288,17 +279,18 @@ int py_init(const char *_prefix)
 void py_teardown()
 {
     set_handler();
-    if (setjmp(bail_buf) == 0) { 
+    if (setjmp(bail_buf) == 0) {
         fs_ops.destroy(NULL);
     }
     unset_handler();
 }
 
-
-void set_objectfs_context(char *bucket, char *access_key, char *secret_key, char *host, int chunksize, int cachesize) {
-    struct objfs *fs = malloc (sizeof (struct objfs));
+void set_objectfs_context(char *bucket, char *access_key, char *secret_key,
+                          char *host, int chunksize, int cachesize)
+{
+    struct objfs *fs = malloc(sizeof(struct objfs));
     fs->bucket = strdup(bucket);
-    //fs->prefix = strdup(prefix);
+    // fs->prefix = strdup(prefix);
     fs->host = strdup(host);
     fs->access = strdup(access_key);
     fs->secret = strdup(secret_key);
@@ -309,7 +301,7 @@ void set_objectfs_context(char *bucket, char *access_key, char *secret_key, char
         .host = host, .access = access_key,
         .secret = secret_key, .use_local = 0,
         .chunk_size = size};*/
-    //fs->s3 = s3_init(bucket, host, access_key, secret_key);
+    // fs->s3 = s3_init(bucket, host, access_key, secret_key);
     ctx.private_data = fs;
-    //struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
+    // struct objfs *tst_fs = ((struct objfs*)ctx.private_data);
 }

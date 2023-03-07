@@ -118,11 +118,11 @@ ifndef CURL_CFLAGS
 endif
 
 ifndef LIBXML2_LIBS
-    LIBXML2_LIBS := $(shell xml2-config --libs)
+    LIBXML2_LIBS := $(shell /usr/bin/xml2-config --libs)
 endif
 
 ifndef LIBXML2_CFLAGS
-    LIBXML2_CFLAGS := $(shell xml2-config --cflags)
+    LIBXML2_CFLAGS := $(shell /usr/bin/xml2-config --cflags)
 endif
 
 ifndef OPENSSL_LIBS

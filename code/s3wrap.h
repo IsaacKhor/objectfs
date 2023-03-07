@@ -7,18 +7,22 @@
 #define __S3WRAP_H__
 
 #include <libs3.h>
+
+#ifdef __cplusplus
+
 #include <list>
 #include <string>
 
-#ifdef __cplusplus
-class s3_target {
+class s3_target
+{
     std::string host, bucket, access, secret;
     S3Protocol protocol;
 
   public:
     s3_target(const char *_host, const char *_bucket, const char *_access,
               const char *_secret, bool encrypted)
-        : host(_host), bucket(_bucket), access(_access), secret(_secret) {
+        : host(_host), bucket(_bucket), access(_access), secret(_secret)
+    {
         protocol = encrypted ? S3ProtocolHTTPS : S3ProtocolHTTP;
     }
 

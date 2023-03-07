@@ -1,9 +1,4 @@
-//
-//
-
-#ifndef __OBJFS_H__
-#define __OBJFS_H__
-
+#pragma once
 #include "s3wrap.h"
 
 struct objfs {
@@ -44,6 +39,4 @@ extern "C" int fs_initialize(const char *);
 extern "C" int fs_mkfs(const char *);
 extern "C" void fs_sync(void);
 extern "C" void fs_teardown(void);
-#endif
-
 #endif
