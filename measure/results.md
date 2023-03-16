@@ -37,3 +37,19 @@ wrtfile1             3744ops       62ops/s   7.7mb/s   40.076ms/op [0.039ms - 24
 createfile1          3745ops       62ops/s   0.0mb/s  215.086ms/op [5.156ms - 1132.812ms]
 173.285: IO Summary: 40981 ops 682.971 ops/s 62/125 rd/wr  15.8mb/s 73.048ms/op
 ```
+
+## Random write
+
+OBFS:
+
+```text
+rand-write1          678409ops    11306ops/s  88.3mb/s    0.086ms/op [0.063ms - 189.263ms]
+109.497: IO Summary: 678409 ops 11306.054 ops/s 0/11306 rd/wr  88.3mb/s 0.086ms/op
+```
+
+S3FS:
+
+```text
+rand-write1          19677ops      328ops/s   2.6mb/s    3.043ms/op [0.028ms - 217.297ms]
+77.381: IO Summary: 19677 ops 327.915 ops/s 0/328 rd/wr   2.6mb/s 3.043ms/op
+```
