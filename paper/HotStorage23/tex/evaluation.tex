@@ -1,0 +1,6 @@
+\section{Evaluation}
+\label{sec:evaluation}
+
+Our ObFS prototype is a FUSE file system implemented in roughly 2000 lines of C++.
+It performs garbage collection and checkpointing, but does not yet implement snapshots, clone, overlays, or partial checkpoints.
+We have verified its functionality against a local S3 object store\footnote{Based on Ceph Rados Gateway (RGW).}, but do not yet have performance results.

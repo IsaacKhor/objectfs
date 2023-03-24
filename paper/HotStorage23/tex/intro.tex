@@ -1,0 +1,69 @@
+\section{Introduction}
+\label{sec:intro}
+
+\outline{missing discussions}
+
+
+\outline{alternatives approaches}
+-- EFS and 
+-- \mania{Why user should use EFS}
+
+
+\outline{storage requirement has been shifted from fixed size block storage to elastic }
+The emerging computing models such as in-process virtualization such as containers~\cite{docker,kubernetees}, serverless computing such as Azure Functions~\cite{azurefunctions}, and large scale data processing frameworks such as Spark\~cite{spark} is changing the way we traditionally interact with the storage system.
+Traditionally, high performance storage preconfigured options such as remove block storage and local SSD has been offered to the application.   
+However, these new computing paradigm requires elastic, high performance, durable, and serverless storage options. The current offering of storage options falls short to provide one or some of these requirements. 
+
+
+\outline{Go through each requirement and talk about why we don't have it}
+These emerging computing paradigm requires elastic storage. 
+The reason is currently data processing frameworks such as Spark are build using predifined clusters. 
+Spark communicates with the storage system in two ways: (1) durable data, (2) ephemeral data. 
+For the durable data, the approach is to use a remote distributed storage system such as HDFS or S3 to load store input and output of a job.
+For the ephemeral data, the local storage of each compute node is used to store the intermediate data, as well as logs and as a swap space for memory of the workers. 
+Typically, for the local storage a preconfigured block device that is local or remote to the computing host is used to store these intermediate temporal data.
+However, it is not possible to know apriori how much storage is reuqired to store all of the temporal data. 
+When a worker node rans out of space if it is local storage the running task will be failed and it requires manual attention of the cluster administrator to resolve the attached volume. 
+One of the reasons that an attached volume could run out of space is the size of the intermediate data which is not known appriori and job configuraiton is done accroding to the first stage of the running job. 
+Any further requirement for local storage is bounded by this preconfigured storage. 
+Recent studies has shown that the size of this intermediate data can vary drastically and preconfigured storage could falls short to enable running job. 
+The solution is to have an elastic storage options that grows and shrinks according to the requirements of the application. 
+What we need here is an elastic and high performance storage option. 
+Elastic solutions such as Amazon EFS and Skyline provides NFS semantics and requires further modification of the applicaiton to adopt the NFS semantic. 
+On the other hand, these alternative elastic solutions provides the consistency across different instances of the file system while this is not a necessary option for applications that only uses file system as a local storage. 
+These alternatives imposes extra latency to enable supports the multi client access to the file system.
+
+The second requirement is the requirement to support serverless applications. 
+Serverless application or function as a service is a new computing paradigm in which users are responsible to define their code and serverless platform will take care of everything else from resource allocation for application to provision the resources to executing the function. 
+One limitation of such system is n these platforms the user has no control over where its job is running thus if the applications require to persist some state locally there is not file system or persistent store that allows the user to do so.
+Thus the defacto approach for serverless application is to leverage the external storage such as external key value storage or object storage. 
+The challenges is this limitation hinders many serverfull applications to adopt themselves to serverless computing paradigm. Because these applications require extensive modification of their code base to the new object store base API.  
+What we need here is a serverless file system that is client side and does not require external storage provisioning such as key value store and support posix api so it does not require extensive modification to the application code base. 
+
+
+
+The third requirement is the requirement for elastic file level image store for the containers. 
+The recent trend for the containers is that the image that builds the container final image are build by fetching different versions of the storage image overtime. 
+There are some solutions that store them as file system but they falls short to provide full posix functionality. 
+what they need is a file system that is capable of storage image as file system. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,207 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%% packages %%%%%%%%%%5
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\usepackage{tikz}
+\usepackage{amsmath, amsfonts}
+\usepackage{filecontents}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{xspace}
+\usepackage{microtype}
+\usepackage{balance}
+% \usepackage{cite}
+\usepackage{cleveref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{flushend}
+\usepackage{hyperref}
+\usepackage[ruled,vlined]{algorithm2e}
+\usepackage[normalem]{ulem}
+\usepackage{booktabs}
+\usepackage{wrapfig}
+\usepackage{flushend}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{comment}
+\usepackage{ulem}
+
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+
+%\usepackage{outlines}
+
+\usepackage{blindtext}
+\usepackage{etoolbox}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%% auxiliarty commands  %%%%%%%%%%5
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\newcommand{\showcomments}{0}
+
+%-- Provides fixed width font for commands and code snips.
+\newcommand{\code}[1]{\texttt{\textbf{#1}}}
+
+%-- Terms...  Use this to introduce a term in the paper.
+\newcommand{\term}[1]{\emph{#1}}
+
+%-- Provides stylization for e-mail addresses
+%\newcommand{\email}[1]{\emph{(#1)}}
+
+%-- Starts a minor section (puts the title inline w/ the text.
+%\newcommand{\minorsection}[1]{\noindent\textbf{#1}:}
+\newcommand{\minorsection}[1]{\vspace{\smallskipamount}\noindent\textbf{#1. }}
+
+%-- Jiri caption
+\newcommand{\minicaption}[2]{\caption[#1]{\textbf{#1.} #2}}
+
+%-- Units on numbers: 4KB -> \units{4}{KB}
+\newcommand{\units}[2]{#1~#2}
+
+%-- Commands...  i.e. WRITE commands.
+\newcommand{\command}[1]{{\sc \MakeLowercase{#1}}}
+
+%-- For notes about things that need to be fixed.
+\newcommand{\fix}[1]{\marginpar{\LARGE\ensuremath{\bullet}}
+    \MakeUppercase{\textbf{[#1]}}}
+%-- For adding inline notes to a draft preceded by your initials
+%-- E.g., \fixnote{JJW}{What the heck is a foobar?}
+\newcommand{\fixnote}[2]{\marginpar{\LARGE\ensuremath{\bullet}}
+    {\textbf{[#1:} \textit{#2\,}\textbf{]}}}
+
+%-- Setting margins: \setmargins{left}{right}{top}{bottom}
+\newcommand{\setmargins}[4]{
+    % Calculations of top & bottom margins
+    \setlength\topmargin{#3}
+    \addtolength\topmargin{-.5in}  %-- seems like this should be 1, but .5
+                                   %-- balances the text top to bottom
+    \addtolength\topmargin{-\headheight}
+    \addtolength\topmargin{-\headsep}
+    \setlength\textheight{\paperheight}
+    \addtolength\textheight{-#3}
+    \addtolength\textheight{-#4}
+
+    % Calculations of left & right margins
+    \setlength\oddsidemargin{#1}
+    \addtolength\oddsidemargin{-1in}
+    \setlength\evensidemargin{\oddsidemargin}
+    \setlength\textwidth{\paperwidth}
+    \addtolength\textwidth{-#1}
+    \addtolength\textwidth{-#2}
+}
+
+%-- For the tabularx environment... Using L, C, R as the column type
+%-- will left, center, or right justify the text.
+
+%-- To comment out a swatch of text, use \omitit{blah blah blah}
+\long\def\omitit#1{}
+
+%-- Inline title; useful for sub-sub-sections in which you don't want a separate
+%-- line for the title.
+\newcommand{\inlinesection}[1]{\smallskip\noindent{\textbf{#1.}}}
+
+%-- todo notes
+
+\newenvironment{outlineenv}{\par\color{red}}{\par}
+\newcommand{\outline}[1]{\begin{outlineenv}#1\end{outlineenv}}
+
+\newcommand{\todoO}[1]{\textsf{\textbf{\textcolor{Orange}{[[#1]]}}}}
+\newcommand{\todoR}[1]{\textsf{\textbf{\textcolor{Red}{[#1]}}}}
+\newcommand{\todoU}[1]{\textsf{\textbf{\textcolor{purple}{[[#1]]}}}}
+\newcommand{\todoA}[1]{\textsf{\textbf{\textcolor{Yellow}{[[#1]]}}}}
+\newcommand{\todoP}[1]{\textsf{\textbf{\textcolor{violet}{[[#1]]}}}}
+\newcommand{\todoL}[1]{\textsf{\textbf{\textcolor{Brown}{[[#1]]}}}}
+\newcommand{\todoT}[1]{\textsf{\textbf{\textcolor{Green}{[[#1]]}}}}
+\newcommand{\outlinetext}[1]{
+   \ifthenelse{\equal{\showcomments}{1}}{
+      \outline{#1}}{}}
+\newcommand{\oyk}[1]{
+   \ifthenelse{\equal{\showcomments}{1}}{
+      \todoR{oyk: #1}}{}}
+
+
+\newcommand{\naive}{}% To make sure that \naive isn't already defined    
+\def\naive/{na\"{\i}ve}
+
+\newcommand{\para}[1]{\smallskip\noindent{\textbf{#1}}}
+
+
+
+% for shepherding process
+%\newcommand{\cradded}[1]{\textcolor{blue}{#1}}
+% Cross out text
+%\newcommand{\crdeleted}[1]{\textcolor{blue}{\sout{#1}}}
+% Replace the second argument by the first argument
+%\newcommand{\crreplaced}[2]{\textcolor{blue}{\sout{#2}}\textcolor{blue}{#1}}
+
+% for camera ready process
+\newcommand{\cradded}[1]{#1}
+\newcommand{\crdeleted}[1]{}
+\newcommand{\crreplaced}[2]{#1}
+
+% Commands
+\newcommand{\myparagraph}[1]{\vspace{\smallskipamount}\noindent\textbf{#1. }}
+\newcommand{\eg}{\emph{e.g.}\xspace}
+\newcommand{\etc}{etc.\@\xspace}
+\newcommand{\cf}{{cf.}\xspace}
+\newcommand{\ie}{\emph{i.e.}\xspace}
+\newcommand{\etal}{\emph{et al.}\xspace}
+
+\newcommand{\anonAzure}{a large cloud provider\xspace}
+
+\newcommand{\anonFunctions}{a large serverless provider\xspace}
+
+\newcommand{\sys}{Palette\xspace}
+
+% Comment out toggletrue line to generate paper with no comments
+\newtoggle{showmarks}
+\toggletrue{showmarks}  %%%    <--- comment out this line :)
+
+
+% side comment
+\def\hn{\sffamily\selectfont}
+\newcommand{\mpfont}{\hn\scriptsize}
+\newcommand{\MPworker}[2]{\unskip{\color{#1}\vrule\vrule}{\marginpar{\raggedright\color{#1}\mpfont #2}}}
+\iftoggle{showmarks}{
+  \newcommand\mania[1]{\textcolor{magenta}{mania: #1}}
+  \newcommand\dsb[1]{\textcolor{green}{DB: #1}}
+  \newcommand\rf[1]{\textcolor{cyan}{RF: #1}}
+  \newcommand\inigo[1]{\textcolor{red}{IG: #1}}
+  \newcommand\gohar[1]{\textcolor{orange}{GOHAR: #1}}
+  \newcommand\cheng[1]{\textcolor{blue}{cheng: #1}}
+  \newcommand\jiyong[1]{\textcolor{orange}{jy: #1}}
+  \newcommand\TODO[1]{\textcolor{blue}{TODO: #1}}
+
+  \newcommand{\CP}[1]{\MPworker{blue}{CT: #1}}
+}{
+  \newcommand\mania[1]{\unskip}
+  \newcommand\daniel[1]{\unskip}
+  \newcommand\rf[1]{\unskip}
+  \newcommand\inigo[1]{\unskip}
+  \newcommand\gohar[1]{\unskip}
+  \newcommand\cheng[1]{\unskip}
+  \newcommand\jiyong[1]{\unskip}
+  \newcommand\TODO[1]{\unskip}
+
+  \newcommand{\CP}[1]{\unskip}
+}
+
+\newcommand{\heading}[1]{
+  \vspace{1ex}
+  \noindent
+  \textbf{#1}}
+
+\newcommand{\todo}[1]{{\color{red}#1}}
+
+% names
+\newcommand{\sqlite}{SQLite\xspace}
+\newcommand{\pmem}{PMem\xspace}
+\newcommand{\tuner}{configure tuner\xspace}
+
+

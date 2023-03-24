@@ -1,0 +1,16 @@
+\section{Background \& related work}
+\label{sec:background}
+
+The closest related work to ObFS is likely ObjectiveFS\footnote{\url{https://objectivefs.com}}, a multi-client file system over S3 which appears to provide NFS-like close-to-open consistency.
+Like ObjectiveFS, it uses S3 as a data and metadata store rather than providing 1:1 mapping, achieving performance comparable to or better than NFS, however its structure and algorithms have not been publicly disclosed and are not known to the authors.
+
+Log-structured file systems have a long history, from LFS~\cite{rosenblum_design_1991} and WAFL~\cite{hitz_file_1994} through more recent systems such as F2FS~\cite{lee_f2fs_2015}.
+To the authors' knowledge F2FS is the only log-structured file system to date to use write-optimized journaling and recovery-time roll-forward to reduce the cost of metadata updates.
+However the use of journaling in F2FS is very limited, as opposed to its pervasive use in ObFS.
+
+The lack of a standard on-media container structure in ObFS is unusual but not unprecedented, and can be compared with BetrFS~\cite{jannen_betrfs_2015} and its use of a schema for data and metadata over an underlying key-value store.
+In both cases the lack of directory containers is a result of fundamental architectural decisions, and does not in itself confer any benefits.
+
+Finally, ObFS owes a debt to several decades of research on Flash Translation Layers.
+In particular, at the time of development of the first log-structured file systems with garbage collection (e.g. LFS~\cite{rosenblum_design_1991}, Envy~\cite{wu_envy_1994}) there was no prior art for understanding the behavior and costs of garbage collection.
+In the time since then great strides have been made in understanding this process, both its risks (i.e. catastrophic performance loss under sustained random write workloads), how to ameliorate them in theory, by segregating data by expected lifetime~\cite{lee_last_2008}, and practical methods for doing so, such as multiple write frontiers~\cite{lee_f2fs_2015} and cleaning hysteresis.
