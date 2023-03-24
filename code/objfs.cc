@@ -68,15 +68,18 @@ std::shared_mutex cache_mutex;
 std::shared_mutex stale_data_mutex;
 std::shared_mutex ckpting_mutex; // checkpoint() holds this mutex so that inode
                                  // map and fs_obj's cannot be modified
-std::mutex
-    ckpt_put_mutex; // checkpoint() holds this mutex and wait for
-                    // write_everything_out to confirm successful put to backend
+
+/**
+ * checkpoint() holds this mutex and wait for write_everything_out to confirm
+ * successful put to backend
+ */
+std::mutex ckpt_put_mutex;
 std::mutex sync_mutex;
 std::mutex fifo_mutex;
 std::condition_variable cv;
 std::condition_variable ckpt_cv;
-std::condition_variable
-    sync_cv; // Don't sync before all regular write_everything_out is done
+// Don't sync before all regular write_everything_out is done
+std::condition_variable sync_cv;
 std::condition_variable fifo_cv;
 std::condition_variable gc_timer_cv;
 std::mutex cv_m;
@@ -117,6 +120,9 @@ std::map<int, size_t> data_log_buffer_sizes;
 
 // Read Cache
 // std::map<int, void *> meta_log_cache;
+/**
+ * This maps objnum -> extents. The extents in turn map ??? to ???
+ */
 std::map<int, std::map<int, void *> *> data_log_cache;
 // std::map<int, size_t> meta_log_cache_sizes;
 std::map<int, std::map<int, size_t> *> data_log_cache_sizes;
@@ -1356,16 +1362,27 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
            ", Len: " + std::to_string(len) + "\n";
     logger->log(info);
 
-    cache_mutex.lock_shared();
-    int left_do_read_offset, right_do_read_offset;
     int cur_ext_offset = ((int)offset / f_bsize) * f_bsize;
-    left_do_read_offset = cur_ext_offset;
+    int left_do_read_offset = cur_ext_offset;
+
+    // TODO Question: is there a lock ordering thing here going on?
+
+    // We may need to upgrade the lock
+    bool is_cache_lock_shared = true;
+    cache_mutex.lock_shared();
 
     fs_file *f;
     if (f_ptr != NULL) {
         f = (fs_file *)f_ptr;
         f->rd_lock();
     }
+
+    // Try to see if the object is in the cache before we fetch from backend
+    // I don't know the real reason since I didn't write the code, but
+    // the reason we need to keep the read lock well beyond when we used the
+    // map is because another thread tries to acquire the lock and will
+    // modify the *contents* of the entry. Thus the read lock is also a read
+    // lock for the contents of the cache entries, not just the cache map itself
     if (data_log_cache.find(index) != data_log_cache.end()) {
         data_extents = data_log_cache[index];
 
@@ -1381,9 +1398,14 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
             cur_ext_offset += f_bsize;
         }
         data_extents = new std::map<int, void *>;
+        // We change the map here, so we can't use a shared lock
+        // Upgrade to exclusive
+        cache_mutex.unlock_shared();
+        cache_mutex.lock();
+        is_cache_lock_shared = false;
         data_log_cache[index] = data_extents;
     }
-    right_do_read_offset = std::min(data_len, cur_ext_offset);
+    int right_do_read_offset = std::min(data_len, cur_ext_offset);
 
     int cur_ext_read_size;
     if (empty_extent_offsets.size() == 0) {
@@ -1414,7 +1436,12 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
             memcpy(buf, cur_ext, len);
             bytes_read += len;
         }
-        cache_mutex.unlock_shared();
+
+        if (is_cache_lock_shared)
+            cache_mutex.unlock_shared();
+        else
+            cache_mutex.unlock();
+
         auto t4 = std::chrono::system_clock::now();
         std::chrono::duration<double> diff4 = t4 - t3;
         info = "RD4|Time: " + std::to_string(diff4.count()) +
@@ -1424,7 +1451,11 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
             f->rd_unlock();
         return bytes_read;
     }
-    cache_mutex.unlock_shared();
+
+    if (is_cache_lock_shared)
+        cache_mutex.unlock_shared();
+    else
+        cache_mutex.unlock();
 
     auto t4 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff4 = t4 - t3;
@@ -2571,6 +2602,7 @@ void fifo()
         });
         while (fifo_size > fifo_limit) {
             cache_mutex.lock();
+
             std::pair<int, int> *pair = fifo_queue.front();
             int objnum = pair->first;
             int offset = pair->second;
@@ -2579,9 +2611,14 @@ void fifo()
             fifo_queue.pop();
             fifo_size--;
 
-            free((*data_log_cache[objnum])[offset]);
-            (*data_log_cache[objnum])[offset] = NULL;
+            auto cache_entry = *(data_log_cache[objnum]);
+            auto offset_entry = cache_entry[offset];
+
+            // delete and free entry
+            free(cache_entry[offset]);
+            cache_entry[offset] = NULL;
             data_log_cache[objnum]->erase(offset);
+
             cache_mutex.unlock();
         }
     }
@@ -2704,7 +2741,7 @@ void gc_write(struct objfs *fs, void *buf, size_t len, int inum,
     inode_mutex.lock_shared();
     fs_obj *obj = inode_map[inum];
     inode_mutex.unlock_shared();
-    if (obj->type != OBJ_FILE) {
+    if (obj == NULL || obj->type != OBJ_FILE) {
         return;
     }
 
