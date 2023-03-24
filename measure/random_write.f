@@ -1,5 +1,5 @@
-
-set $dir=/mnt/obfs-test
+set $dir=/mnt/fsbench
+enable lathist
 set $filesize=5g
 set $iosize=8k
 set $nthreads=1
