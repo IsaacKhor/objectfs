@@ -142,7 +142,7 @@ template <class T> struct extmap {
         if (!e)
             return nullptr;
         //	auto tmp = e ? (_extent *)((char*)e - sizeof(tmp->rb)) :
-        //nullptr;
+        // nullptr;
         _extent *tmp = container_of(e, _extent, ext);
         tmp = map_next(tmp);
         return tmp ? &tmp->ext : nullptr;

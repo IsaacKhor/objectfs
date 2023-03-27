@@ -1,9 +1,9 @@
 import boto3
 import os
 from boto3.s3.transfer import TransferConfig
-url = 'http://10.255.23.109:9000'
-access_key = 'minio'
-secret_key = 'miniostorage'
+url = 'http://localhost:9000'
+access_key = 'minioadmin'
+secret_key = 'minioadmin'
 
 s3 = boto3.resource('s3', endpoint_url=url, use_ssl=False, 
         aws_access_key_id=access_key, aws_secret_access_key=secret_key)
@@ -13,7 +13,7 @@ config = TransferConfig(multipart_threshold=5 * GB, max_concurrency=10, use_thre
 
 bucket = s3.Bucket('songs')
 for bucket_object in bucket.objects.all():
-    if bucket_object.key != 'prefix1.00000000':
+    if bucket_object.key != 'prefix.00000000':
         bucket_object.delete()
     
 

@@ -1,12 +1,7 @@
-/*
- * file:        iov.h
- * description:
- */
-
-#ifndef __IOV_H__
-#define __IOV_H__
+#pragma once
 
 #include <stdbool.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,6 +18,4 @@ ssize_t iov_sum(struct iovec *iov, int iov_cnt);
 
 #ifdef __cplusplus
 }
-#endif
-
 #endif

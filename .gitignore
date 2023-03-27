@@ -42,3 +42,5 @@ objfs-mount
 s3.config
 secrets.md
 .env
+
+venv/
