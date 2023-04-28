@@ -38,6 +38,16 @@ dir/*
 __pycache__/
 .vscode/
 
+# paper junk
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.synctex.gz
+*.pdf
+
 objfs-mount
 s3.config
 secrets.md

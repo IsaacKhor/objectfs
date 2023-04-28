@@ -28,13 +28,18 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <ctime>
 #include <errno.h>
 #include <fcntl.h>
+#include <fstream>
 #include <fuse.h>
 #include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <set>
 #include <shared_mutex>
@@ -43,23 +48,18 @@
 #include <string.h>
 #include <string>
 #include <sys/stat.h>
+#include <thread>
 #include <time.h>
 #include <unistd.h>
 #include <unordered_map>
 #include <vector>
 
+#include "common.h"
 #include "objfs.h"
 #include "s3wrap.h"
 #include <libs3.h>
 #include <list>
 #include <sys/uio.h>
-
-#include <chrono>
-#include <ctime>
-#include <fstream>
-#include <mutex>
-#include <queue>
-#include <thread>
 
 std::shared_mutex inode_mutex;
 std::mutex log_mutex;
@@ -96,10 +96,10 @@ bool put_before_ckpt; // In checkpoint(), check if write_everything_out
 bool started_gc; // After gc starts, this sets to true. fs_write and fs_truncate
                  // are recorded so that gc_write doesn't overwrite
 
-std::atomic<int> writing_log_count(
-    0); // Counts how many write_everything_out() for regular logs is executing
-std::atomic<int>
-    gc_range(0); // GC all normal s3 objects before and including this index
+// Counts how many write_everything_out() for regular logs is executing
+std::atomic<int> writing_log_count(0);
+// GC all normal s3 objects before and including this index
+std::atomic<int> gc_range(0);
 std::atomic<int> fifo_size(0);
 std::atomic<int> next_s3_index(1);
 std::atomic<int> next_inode(3);  // the root "" has inum 2
@@ -1101,28 +1101,29 @@ int serialize_all(int ckpted_s3_index, ckpt_header *h, std::stringstream &objs)
     // objs.str().c_str(), itable_offset-objs_offset
 }
 
-void deserialize_tree(void *buf, size_t len)
+void deserialize_tree(void *bufv, size_t len)
 {
-    void *end = (void *)buf + len;
+    char *buf = (char *)bufv;
+    char *end = (char *)buf + len;
     // TODO: put in asserts in fs_directory::fs_directory, check that file No
     // and dir No point to valid inodes
     while (buf < end) {
         fs_obj *cur_obj = (fs_obj *)buf;
         if (cur_obj->type == OBJ_DIR) {
             fs_directory *d = new fs_directory((void *)buf, cur_obj->len);
-            buf = (void *)buf + cur_obj->len;
+            buf = buf + cur_obj->len;
             set_inode_map(cur_obj->inum, d);
         } else if (cur_obj->type == OBJ_FILE) {
             fs_file *f = new fs_file((void *)buf, cur_obj->len);
-            buf = (void *)buf + cur_obj->len;
+            buf = buf + cur_obj->len;
             set_inode_map(cur_obj->inum, f);
         } else if (cur_obj->type == OBJ_SYMLINK) {
             fs_link *s = new fs_link((void *)buf, cur_obj->len);
-            buf = (void *)buf + cur_obj->len;
+            buf = buf + cur_obj->len;
             set_inode_map(cur_obj->inum, s);
         } else {
             fs_obj *o = new fs_obj((void *)buf, cur_obj->len);
-            buf = (void *)buf + cur_obj->len;
+            buf = buf + cur_obj->len;
             set_inode_map(cur_obj->inum, o);
         }
     }
@@ -1159,7 +1160,7 @@ void write_everything_out(struct objfs *fs)
         .hdr_len = (int)(meta_log_size + sizeof(obj_header)),
         .this_index = next_s3_index,
         .ckpt_index = ckpt_index,
-        .data_len = data_log_size,
+        .data_len = static_cast<int32_t>(data_log_size),
     };
     next_s3_index++;
     for (auto it = written_inodes.begin(); it != written_inodes.end();
@@ -1210,6 +1211,8 @@ void write_everything_out(struct objfs *fs)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        debug("writing_log_count: %d\n", writing_log_count.load());
     }
     sync_cv.notify_all();
 }
@@ -1221,6 +1224,7 @@ void maybe_write(struct objfs *fs)
         {
             std::unique_lock<std::mutex> sync_lk(sync_mutex);
             writing_log_count++;
+            debug("log incr %i", writing_log_count.load());
         }
         std::thread(write_everything_out, fs).detach();
     } else {
@@ -1303,12 +1307,25 @@ int get_datalen(struct objfs *fs, int index, bool ckpt)
     return h.data_len;
 }
 
-// read @len bytes of file data from object @index starting at
-// data offset @offset (need to adjust for header length)
-//
-int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
-              size_t len)
+/**
+ * Reads specific chunk of data from the object store
+ *
+ * @param fs The objfs instance
+ * @param f_ptr The file pointer. Can be NULL. If not null, will be used to lock
+ * the appropriate file
+ * @param buf The destination buffer
+ * @param index The index of the object
+ * @param offset The offset in the object in bytes, not including the header
+ * @param len The length of the data to read
+ *
+ * @return The number of bytes read
+ */
+int read_data(struct objfs *fs, void *f_ptr, void *bufv, int index,
+              off_t offset, size_t len)
 {
+    char *buf = (char *)bufv;
+    // Look in the data log buffer first, if it's there we just return it
+    // directly
     auto t0 = std::chrono::system_clock::now();
     log_mutex.lock();
     if (index == next_s3_index) {
@@ -1350,8 +1367,11 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
     int data_len = get_datalen(fs, index, false);
     int hdr_len = get_offset(fs, index, false);
 
-    if (offset + len > data_len)
+    if (offset + len > data_len) {
+        log_error("read_data: offset + len %zu > data_len %i", offset + len,
+                  data_len);
         return -1;
+    }
 
     std::set<int> empty_extent_offsets;
     std::map<int, void *> *data_extents;
@@ -1412,7 +1432,7 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
         int bytes_read = 0;
         cur_ext_offset = ((int)offset / f_bsize) * f_bsize;
         auto it = data_extents->find(cur_ext_offset);
-        void *cur_ext = it->second;
+        char *cur_ext = (char *)it->second;
         cur_ext_read_size =
             std::min(cur_ext_offset + f_bsize - (int)offset, (int)len);
         memcpy(buf, cur_ext + offset - cur_ext_offset, cur_ext_read_size);
@@ -1423,7 +1443,7 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
         while (len >= f_bsize) {
             cur_ext_offset += f_bsize;
             it = data_extents->find(cur_ext_offset);
-            cur_ext = it->second;
+            cur_ext = (char *)it->second;
             memcpy(buf, cur_ext, f_bsize);
             buf += f_bsize;
             len -= f_bsize;
@@ -1432,7 +1452,7 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
         if (len > 0) {
             cur_ext_offset += f_bsize;
             it = data_extents->find(cur_ext_offset);
-            cur_ext = it->second;
+            cur_ext = (char *)it->second;
             memcpy(buf, cur_ext, len);
             bytes_read += len;
         }
@@ -1463,8 +1483,8 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
            ", Len: " + std::to_string(len) + "\n";
     logger->log(info);
 
-    void *data_log =
-        malloc(sizeof(char) * (right_do_read_offset - left_do_read_offset));
+    char *data_log = (char *)malloc(
+        sizeof(char) * (right_do_read_offset - left_do_read_offset));
 
     // int do_read_resp = do_read(fs, index, data_log, data_len, hdr_len,
     // false);
@@ -1472,6 +1492,7 @@ int read_data(struct objfs *fs, void *f_ptr, void *buf, int index, off_t offset,
         do_read(fs, index, data_log, right_do_read_offset - left_do_read_offset,
                 hdr_len + left_do_read_offset, false);
     if (do_read_resp < 0) {
+        log_error("do_read to S3 backend failed\n");
         if (f_ptr != NULL)
             f->rd_unlock();
         return -1;
@@ -1605,11 +1626,14 @@ int fs_getattr(const char *path, struct stat *sb)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
     }
     inode_mutex.lock_shared();
     int inum = path_2_inum(path);
     if (inum < 0) {
         inode_mutex.unlock_shared();
+        writing_log_count--;
+        sync_cv.notify_all();
         return inum;
     }
 
@@ -1620,6 +1644,8 @@ int fs_getattr(const char *path, struct stat *sb)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        sync_cv.notify_all();
     }
     return 0;
 }
@@ -1631,6 +1657,7 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
     }
     int inum;
     std::shared_lock lock(inode_mutex);
@@ -1661,6 +1688,8 @@ int fs_readdir(const char *path, void *ptr, fuse_fill_dir_t filler,
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        sync_cv.notify_all();
     }
     return 0;
 }
@@ -1676,6 +1705,7 @@ int fs_write(const char *path, const char *buf, size_t len, off_t offset,
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
     }
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff1 = t1 - t0;
@@ -1773,6 +1803,8 @@ int fs_write(const char *path, const char *buf, size_t len, off_t offset,
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        sync_cv.notify_all();
     }
     t0 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff6 = t0 - t1;
@@ -1852,6 +1884,7 @@ int fs_mkdir(const char *path, mode_t mode)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
     }
 
     inode_mutex.lock_shared();
@@ -1903,6 +1936,8 @@ int fs_mkdir(const char *path, mode_t mode)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        sync_cv.notify_all();
     }
     return 0;
 }
@@ -1931,6 +1966,7 @@ int fs_rmdir(const char *path)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
     }
     inode_mutex.lock_shared();
     auto [inum, parent_inum, leaf] = path_2_inum2(path);
@@ -1974,6 +2010,8 @@ int fs_rmdir(const char *path)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        sync_cv.notify_all();
     }
     return 0;
 }
@@ -2041,6 +2079,7 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
     }
     int inum = create_node(fs, path, mode | S_IFREG, OBJ_FILE, 0);
 
@@ -2053,6 +2092,8 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        sync_cv.notify_all();
     }
     return 0;
 }
@@ -2092,6 +2133,7 @@ int fs_truncate(const char *path, off_t len)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
     }
     inode_mutex.lock_shared();
     int inum = path_2_inum(path);
@@ -2137,6 +2179,8 @@ int fs_truncate(const char *path, off_t len)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        sync_cv.notify_all();
     }
     return 0;
 }
@@ -2347,6 +2391,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
     }
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff1 = t1 - t0;
@@ -2361,7 +2406,9 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     //}
 
     if (inum < 0) {
+        log_error("read: path_2_inum failed %i", inum);
         inode_mutex.unlock_shared();
+        writing_log_count--;
         return inum;
     }
     t0 = std::chrono::system_clock::now();
@@ -2400,12 +2447,14 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
                 skip; // length of buffer to consume (unmapped=skip,mapped)
             if (_len > len)
                 _len = len;
-            f->read_unlock();
+            // f->read_unlock();
             if (read_data(fs, f, buf, e.objnum, e.offset + skip, _len) < 0) {
-                // f->read_unlock();
+                f->read_unlock();
+                writing_log_count--;
+                log_error("read_data failed");
                 return -EIO;
             }
-            f->read_lock();
+            // f->read_lock();
             bytes += _len;
             offset += _len;
             buf += _len;
@@ -2419,23 +2468,32 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        sync_cv.notify_all();
     }
     t1 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff5 = t1 - t0;
 
-    std::string info = "READ1|Time: " + std::to_string(diff1.count()) +
-                       ", Path: " + path + "\n";
+    typedef std::chrono::duration<double, std::micro> us;
+    us u1 = std::chrono::duration_cast<us>(diff1);
+    us u2 = std::chrono::duration_cast<us>(diff2);
+    us u3 = std::chrono::duration_cast<us>(diff3);
+    us u4 = std::chrono::duration_cast<us>(diff4);
+    us u5 = std::chrono::duration_cast<us>(diff5);
+
+    std::string info = "READ1|Time: " + std::to_string(u1.count()) +
+                       "us, Path: " + path + "\n";
     logger->log(info);
-    info = "READ2|Time: " + std::to_string(diff2.count()) + ", Path: " + path +
+    info = "READ2|Time: " + std::to_string(u2.count()) + "us, Path: " + path +
            "\n";
     logger->log(info);
-    info = "READ3|Time: " + std::to_string(diff3.count()) + ", Path: " + path +
+    info = "READ3|Time: " + std::to_string(u3.count()) + "us, Path: " + path +
            "\n";
     logger->log(info);
-    info = "READ4|Time: " + std::to_string(diff4.count()) + ", Path: " + path +
+    info = "READ4|Time: " + std::to_string(u4.count()) + "us, Path: " + path +
            "\n";
     logger->log(info);
-    info = "READ5|Time: " + std::to_string(diff5.count()) + ", Path: " + path +
+    info = "READ5|Time: " + std::to_string(u5.count()) + "us, Path: " + path +
            "\n";
     logger->log(info);
     return bytes;
@@ -2544,26 +2602,6 @@ int fs_statfs(const char *path, struct statvfs *st)
     return 0;
 }
 
-int fs_fsync(const char *path, int, struct fuse_file_info *fi)
-{
-    struct objfs *fs = (struct objfs *)fuse_get_context()->private_data;
-
-    {
-        std::unique_lock<std::mutex> sync_lk(sync_mutex);
-        using namespace std::literals::chrono_literals;
-        sync_cv.wait_for(sync_lk, 500ms,
-                         [] { return writing_log_count.load() == 0; });
-    }
-    log_mutex.lock();
-    {
-        std::unique_lock<std::mutex> sync_lk(sync_mutex);
-        writing_log_count++;
-    }
-    write_everything_out(fs);
-
-    return 0;
-}
-
 // TODO: enable fifo to store old data that's recently read
 void fifo()
 {
@@ -2612,7 +2650,7 @@ void fifo()
             fifo_size--;
 
             auto cache_entry = *(data_log_cache[objnum]);
-            auto offset_entry = cache_entry[offset];
+            // auto offset_entry = cache_entry[offset];
 
             // delete and free entry
             free(cache_entry[offset]);
@@ -2629,6 +2667,7 @@ void checkpoint(struct objfs *fs)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
     }
     ckpting_mutex.lock();
     if (quit_ckpt) {
@@ -2645,6 +2684,7 @@ void checkpoint(struct objfs *fs)
         {
             std::unique_lock<std::mutex> sync_lk(sync_mutex);
             writing_log_count++;
+            debug("log incr %i", writing_log_count.load());
         }
         write_everything_out(fs);
     } else { // If there is nothing in log, then don't write_everything_out
@@ -2691,6 +2731,8 @@ void checkpoint(struct objfs *fs)
     {
         std::unique_lock<std::mutex> sync_lk(sync_mutex);
         writing_log_count--;
+        debug("log decr %i", writing_log_count.load());
+        sync_cv.notify_all();
     }
     writes_after_ckpt.clear();
     truncs_after_ckpt.clear();
@@ -2735,9 +2777,10 @@ void gc_timer(struct objfs *fs)
     }
 }
 
-void gc_write(struct objfs *fs, void *buf, size_t len, int inum,
+void gc_write(struct objfs *fs, void *bufv, size_t len, int inum,
               int file_offset)
 {
+    char *buf = (char *)bufv;
     inode_mutex.lock_shared();
     fs_obj *obj = inode_map[inum];
     inode_mutex.unlock_shared();
@@ -2775,14 +2818,14 @@ void gc_write(struct objfs *fs, void *buf, size_t len, int inum,
                 break;
             int skip = w_offset + w_len - file_offset;
             if (w_offset <= file_offset) {
-                buf = (void *)buf + skip;
+                buf = buf + skip;
                 file_offset += skip;
                 len -= skip;
                 continue;
             }
 
             gc_write_extent(buf, inum, file_offset, w_offset - file_offset);
-            buf = (void *)buf + skip;
+            buf = buf + skip;
             file_offset += skip;
             len -= skip;
         }
@@ -2952,6 +2995,7 @@ void gc_obj(struct objfs *fs, int ckpted_s3_index)
         {
             std::unique_lock<std::mutex> sync_lk(sync_mutex);
             writing_log_count++;
+            debug("log incr %i", writing_log_count.load());
         }
         printf("Additional GC write everything out\n");
         write_everything_out(fs);
@@ -3095,7 +3139,7 @@ void *fs_init(struct fuse_conn_info *conn)
     // if (conn->reserved[0] == 9) {
     std::thread(fifo).detach();
     std::thread(checkpoint_timer, fs).detach();
-    std::thread(gc_timer, fs).detach();
+    // std::thread(gc_timer, fs).detach();
     //}
 
     return (void *)fs;
@@ -3107,7 +3151,7 @@ void fs_teardown(void *foo)
     quit_gc = true;
     quit_fifo = true;
     cv.notify_all();
-    gc_timer_cv.notify_all();
+    // gc_timer_cv.notify_all();
     fifo_cv.notify_all();
 
     {
@@ -3144,6 +3188,29 @@ void fs_teardown(void *foo)
          it = data_lens.erase(it))
         ;
     data_lens_mutex.unlock();
+}
+
+int fs_fsync(const char *path, int, struct fuse_file_info *fi)
+{
+    return 0;
+    struct objfs *fs = (struct objfs *)fuse_get_context()->private_data;
+
+    {
+        std::unique_lock<std::mutex> sync_lk(sync_mutex);
+        using namespace std::literals::chrono_literals;
+        sync_cv.wait_for(sync_lk, 500ms,
+                         [] { return writing_log_count.load() == 0; });
+        debug("fsync: writing_log_count: %d\n", writing_log_count.load());
+    }
+    log_mutex.lock();
+    {
+        std::unique_lock<std::mutex> sync_lk(sync_mutex);
+        writing_log_count++;
+        debug("log incr %i", writing_log_count.load());
+    }
+    write_everything_out(fs);
+
+    return 0;
 }
 
 #if 0
