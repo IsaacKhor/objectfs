@@ -1278,6 +1278,7 @@ int do_read(struct objfs *fs, int index, void *buf, size_t len, size_t offset,
     std::string key =
         fmt::format("{}.{:08x}{}", fs->prefix, index, ckpt ? ".ck" : "");
     struct iovec iov = {.iov_base = buf, .iov_len = len};
+    logger->log("read from s3 backend\n");
     S3Status status = fs->s3->s3_get(key, offset, len, &iov, 1);
 
     if (S3StatusOK != status)
@@ -1363,8 +1364,9 @@ int read_data(struct objfs *fs, void *f_ptr, void *bufv, int index,
     log_mutex.unlock();
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff1 = (t1 - t0) * 1000;
-    std::string info = "RD1|Time: " + std::to_string(diff1.count()) +
-                       ", Len: " + std::to_string(len) + "\n";
+    std::string info =
+        "RD1 active log\t|Time: " + std::to_string(diff1.count()) +
+        ", Len: " + std::to_string(len) + "\n";
     logger->log(info);
     buffer_mutex.lock_shared();
     if (meta_log_buffer.find(index) != meta_log_buffer.end()) {
@@ -1373,7 +1375,7 @@ int read_data(struct objfs *fs, void *f_ptr, void *bufv, int index,
         buffer_mutex.unlock_shared();
         auto t2 = std::chrono::system_clock::now();
         std::chrono::duration<double> diff2 = (t2 - t1) * 1000;
-        info = "RD2 pending backend\t|Time: " + std::to_string(diff2.count()) +
+        info = "RD2 pending\t|Time: " + std::to_string(diff2.count()) +
                ", Len: " + std::to_string(len) + "\n";
         logger->log(info);
         return len;
@@ -1424,7 +1426,7 @@ int read_data(struct objfs *fs, void *f_ptr, void *bufv, int index,
     // map is because another thread tries to acquire the lock and will
     // modify the *contents* of the entry. Thus the read lock is also a read
     // lock for the contents of the cache entries, not just the cache map itself
-    if (data_log_cache.find(index) != data_log_cache.end()) {
+    if (data_log_cache.contains(index)) {
         data_extents = data_log_cache[index];
 
         while (cur_ext_offset < offset + len) {
@@ -2337,6 +2339,8 @@ int fs_open(const char *path, struct fuse_file_info *fi)
 int fs_read(const char *path, char *buf, size_t len, off_t offset,
             struct fuse_file_info *fi)
 {
+    typedef std::chrono::duration<double, std::micro> us;
+    logger->log("===fs_read start" + std::string(path) + "\n");
     CounterGuard g(&writing_log_count, &sync_cv);
     auto t0 = std::chrono::system_clock::now();
     const std::shared_lock<std::shared_mutex> ckpting_lock(ckpting_mutex);
@@ -2344,6 +2348,11 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 
     auto t1 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff1 = (t1 - t0) * 1000;
+    us u1 = std::chrono::duration_cast<us>(diff1);
+    std::string info =
+        "fs_read sync chkpt mtx\t|Time: " + std::to_string(u1.count()) +
+        "us, Path: " + path + "\n";
+    logger->log(info);
 
     int inum;
     inode_mutex.lock_shared();
@@ -2361,6 +2370,10 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     }
     t0 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff2 = (t0 - t1) * 1000;
+    us u2 = std::chrono::duration_cast<us>(diff2);
+    info = "fs_read inode\t\t|Time: " + std::to_string(u2.count()) +
+           "us, Path: " + path + "\n";
+    logger->log(info);
 
     fs_obj *obj = inode_map[inum];
     inode_mutex.unlock_shared();
@@ -2374,6 +2387,10 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     f->read_lock();
     t1 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff3 = (t1 - t0) * 1000;
+    us u3 = std::chrono::duration_cast<us>(diff3);
+    info = "fs_read file read lck\t|Time: " + std::to_string(u3.count()) +
+           "us, Path: " + path + "\n";
+    logger->log(info);
     for (auto it = f->extents.lookup(offset); len > 0 && it != f->extents.end();
          it++) {
         auto [base, e] = *it;
@@ -2411,34 +2428,19 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     }
     t0 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff4 = (t0 - t1) * 1000;
+    us u4 = std::chrono::duration_cast<us>(diff4);
+    info = "fs_read trav extents\t|Time: " + std::to_string(u4.count()) +
+           "us, Path: " + path + "\n";
+    logger->log(info);
     f->read_unlock();
 
     t1 = std::chrono::system_clock::now();
     std::chrono::duration<double> diff5 = (t1 - t0) * 1000;
-
-    typedef std::chrono::duration<double, std::micro> us;
-    us u1 = std::chrono::duration_cast<us>(diff1);
-    us u2 = std::chrono::duration_cast<us>(diff2);
-    us u3 = std::chrono::duration_cast<us>(diff3);
-    us u4 = std::chrono::duration_cast<us>(diff4);
     us u5 = std::chrono::duration_cast<us>(diff5);
-
-    std::string info =
-        "READ1 sync + chkpt mtx\t|Time: " + std::to_string(u1.count()) +
-        "us, Path: " + path + "\n";
-    logger->log(info);
-    info = "READ2 inode\t\t|Time: " + std::to_string(u2.count()) +
+    info = "fs_read notify\t\t|Time: " + std::to_string(u5.count()) +
            "us, Path: " + path + "\n";
     logger->log(info);
-    info = "READ3 file read lck\t|Time: " + std::to_string(u3.count()) +
-           "us, Path: " + path + "\n";
-    logger->log(info);
-    info = "READ4 traverse extents\t|Time: " + std::to_string(u4.count()) +
-           "us, Path: " + path + "\n";
-    logger->log(info);
-    info = "READ5 notify\t\t|Time: " + std::to_string(u5.count()) +
-           "us, Path: " + path + "\n";
-    logger->log(info);
+    logger->log("===fs_read end" + std::string(path) + "\n");
     return bytes;
 }
 
@@ -2633,7 +2635,7 @@ void checkpoint(struct objfs *fs)
         ckpt_index++;
     }
     ckpt_index++;
-    std::string key = fmt::format("{}.{}.ck", fs->prefix, ckpt_index.load());
+    std::string key = fmt::format("{}.{:08x}.ck", fs->prefix, ckpt_index.load());
 
     ckpt_header h;
     std::stringstream objs;
@@ -3009,6 +3011,7 @@ void *fs_init(struct fuse_conn_info *conn)
             throw "bad object";
         buf = malloc(offset);
         struct iovec iov[] = {{.iov_base = buf, .iov_len = (size_t)offset}};
+        logger->log("read header from s3\n");
         auto status = fs->s3->s3_get(it->c_str(), 0, offset, iov, 1);
         if (S3StatusOK != status)
             throw "can't read header";
