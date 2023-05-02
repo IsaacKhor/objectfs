@@ -2347,7 +2347,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     struct objfs *fs = (struct objfs *)fuse_get_context()->private_data;
 
     auto t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff1 = (t1 - t0) * 1000;
+    std::chrono::duration<double> diff1 = (t1 - t0);
     us u1 = std::chrono::duration_cast<us>(diff1);
     std::string info =
         "fs_read sync chkpt mtx\t|Time: " + std::to_string(u1.count()) +
@@ -2369,7 +2369,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
         return inum;
     }
     t0 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff2 = (t0 - t1) * 1000;
+    std::chrono::duration<double> diff2 = (t0 - t1);
     us u2 = std::chrono::duration_cast<us>(diff2);
     info = "fs_read inode\t\t|Time: " + std::to_string(u2.count()) +
            "us, Path: " + path + "\n";
@@ -2386,7 +2386,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
 
     f->read_lock();
     t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff3 = (t1 - t0) * 1000;
+    std::chrono::duration<double> diff3 = (t1 - t0);
     us u3 = std::chrono::duration_cast<us>(diff3);
     info = "fs_read file read lck\t|Time: " + std::to_string(u3.count()) +
            "us, Path: " + path + "\n";
@@ -2427,7 +2427,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
         }
     }
     t0 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff4 = (t0 - t1) * 1000;
+    std::chrono::duration<double> diff4 = (t0 - t1);
     us u4 = std::chrono::duration_cast<us>(diff4);
     info = "fs_read trav extents\t|Time: " + std::to_string(u4.count()) +
            "us, Path: " + path + "\n";
@@ -2435,7 +2435,7 @@ int fs_read(const char *path, char *buf, size_t len, off_t offset,
     f->read_unlock();
 
     t1 = std::chrono::system_clock::now();
-    std::chrono::duration<double> diff5 = (t1 - t0) * 1000;
+    std::chrono::duration<double> diff5 = (t1 - t0);
     us u5 = std::chrono::duration_cast<us>(diff5);
     info = "fs_read notify\t\t|Time: " + std::to_string(u5.count()) +
            "us, Path: " + path + "\n";
@@ -2635,7 +2635,8 @@ void checkpoint(struct objfs *fs)
         ckpt_index++;
     }
     ckpt_index++;
-    std::string key = fmt::format("{}.{:08x}.ck", fs->prefix, ckpt_index.load());
+    std::string key =
+        fmt::format("{}.{:08x}.ck", fs->prefix, ckpt_index.load());
 
     ckpt_header h;
     std::stringstream objs;
