@@ -144,3 +144,33 @@ readfile1            2999ops       50ops/s   0.7mb/s   11.644ms/op [0.614ms - 23
 openfile1            3000ops       50ops/s   0.0mb/s   28.871ms/op [5.775ms - 234.073ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 8 350 2087 472 51 32 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
 117.113: IO Summary: 92678 ops 1544.526 ops/s 498/50 rd/wr   7.7mb/s 63.389ms/op
 117.113: Shutting down processes
+Filebench Version 1.5-alpha3
+0.000: Allocated 177MB of shared memory
+0.001: Latency histogram enabled
+0.001: Varmail Version 3.0 personality successfully loaded
+0.001: Populating and pre-allocating filesets
+0.003: bigfileset populated: 1000 files, avg. dir. width = 1000000, avg. dir. depth = 0.5, 0 leafdirs, 14.959MB total size
+0.003: Removing bigfileset tree (if exists)
+1.386: Pre-allocating directories in bigfileset tree
+1.413: Pre-allocating files in bigfileset tree
+8.978: Waiting for pre-allocation to finish (in case of a parallel pre-allocation)
+8.978: Population and pre-allocation of filesets completed
+8.979: Starting 1 filereader instances
+9.980: Running...
+69.985: Run took 60 seconds...
+69.985: Per-Operation Breakdown
+closefile4           5390ops       90ops/s   0.0mb/s    2.065ms/op [0.019ms - 19.627ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 314 528 401 346 56 478 931 1518 796 21 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile4            5390ops       90ops/s   1.4mb/s    2.921ms/op [0.568ms - 19.498ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1154 605 2519 1075 35 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile4            5390ops       90ops/s   0.0mb/s    7.075ms/op [2.048ms - 27.335ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 728 3171 1472 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile3           5390ops       90ops/s   0.0mb/s    2.842ms/op [0.435ms - 14.774ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 79 846 1238 2087 1122 18 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+fsyncfile3           5390ops       90ops/s   0.0mb/s    5.189ms/op [2.266ms - 36.004ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1697 3447 240 5 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+appendfilerand3      5391ops       90ops/s   0.7mb/s    1.568ms/op [0.018ms - 15.300ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 218 1053 411 336 67 523 967 1412 400 4 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile3            5392ops       90ops/s   1.4mb/s    2.715ms/op [0.552ms - 21.218ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1398 547 2538 876 32 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile3            5392ops       90ops/s   0.0mb/s    7.005ms/op [1.997ms - 41.044ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 776 3198 1394 21 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile2           5393ops       90ops/s   0.0mb/s    2.963ms/op [0.439ms - 11.418ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 86 646 1276 2149 1205 31 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+fsyncfile2           5393ops       90ops/s   0.0mb/s    4.509ms/op [2.097ms - 19.996ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 2808 2433 149 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+appendfilerand2      5393ops       90ops/s   0.7mb/s    1.226ms/op [0.021ms - 27.535ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 43 880 687 469 22 1452 736 786 306 10 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+createfile2          5394ops       90ops/s   0.0mb/s   72.018ms/op [12.648ms - 140.266ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 10 4 1502 3877 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+deletefile1          5397ops       90ops/s   0.0mb/s   65.665ms/op [1.318ms - 111.600ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 105 52 47 7 9 2400 2777 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+69.985: IO Summary: 70095 ops 1168.173 ops/s 180/180 rd/wr   4.1mb/s 13.680ms/op
+69.985: Shutting down processes
