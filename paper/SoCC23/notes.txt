@@ -1,0 +1,52 @@
+### Wed May  3 09:52:57 2023:
+
+need to compare against at least one paper from each category in (corrected, up-to-date version of) Agni Table 1:
+
+-----------------------------
++ Goofys [14], SVFS [55], Riofs [38]
++ S3FS [63], Blobfuse [18], Gcsfuse [46]
++ YAS3FS [60]
++ ---------------------------
++ MarFS [37], SCFS [9]
++ S3QL [62]
++ ObjFS [50], Cumulus [80], BlueSky [81]
++ CephFS [82]
++ ---------------------------
++ Elastifile [23], CloudFS [59], FSX [4]
++ ---------------------------
++ OIO-FS [51]
++ ProxyFS [36]
++ ---------------------------
++ Agni
+-----------------------------
+
+https://github.com/kahing/goofys
+https://github.com/ovh/svfs
+https://github.com/skoobe/riofs
+https://github.com/s3fs-fuse/s3fs-fuse
+https://github.com/Azure/azure-storage-fuse
+https://github.com/GoogleCloudPlatform/gcsfuse
+https://github.com/danilop/yas3fs
+
+* Jeff Inman, Will Vining, Garrett Ransom, and Gary Grider. 2017. MarFS, a Near-POSIX Interface to Cloud Objects. ; Login 42, LA-UR–16-28720; LA-UR–16-28952 (2017). [has since abandoned S3, I think] https://github.com/mar-file-system/marfs
+* Alysson Bessani, Ricardo Mendes, Tiago Oliveira, Nuno Neves, Miguel Correia, Marcelo Pasin, and Paulo Verissimo. 2014. SCFS: A Shared Cloud-backed File System. In 2014 USENIX Annual Technical Conference (USENIX ATC 14). USENIX Association, Philadelphia, PA, 169–180. https://www.usenix.org/conference/ atc14/technical-sessions/presentation/bessani  https://github.com/cloud-of-clouds/SCFS
+* S3QL (https://github.com/s3ql/s3ql) -> JuiceFS (juicefs.com)
+* ObjFS = ObjectiveFS
+* Cumulus: see BlueSky. Michael Vrable, Stefan Savage, and Geoffrey M. Voelker. 2009. Cumulus: Filesystem Backup to the Cloud. Trans. Storage 5, 4, Article 14 (Dec. 2009), 28 pages. https://doi.org/10.1145/1629080.1629084
+* https://github.com/richwolski/bluesky
+* CephFS is *not* applicable
+
+* Elastifile = https://web.archive.org/web/20190713054739/https://www.elastifile.com/product/
+* Panzura. 2019. Panzure CloudFS. Retrieved 30 May, 2019 from https://panzura. com/technology/panzura- cloudfs/, https://en.wikipedia.org/wiki/Panzura
+* https://aws.amazon.com/fsx/, doesn't seem applicable
+
+* OpenIO. 2019. OpenIO FS. Retrieved 30 May, 2019 from https://docs.openio.io/ 18.04/source/arch- design/fs_overview.html -> https://docs.openio.io/latest/source/arch-design/fs_overview.html
+* SwiftStack Inc. 2019. ProxyFS. Retrieved 30 May, 2019 from https://github.com/
+swiftstack/ProxyFS
+
+other notes from zoom:
+* https://acmsocc.org/2023/papers.html
+* https://dl.acm.org/doi/pdf/10.1145/3357223.3362703
+* https://www.techtarget.com/searchaws/tip/Amazon-FSx-vs-EFS-Compare-the-AWS-file-services
+* https://github.com/danilop/yas3fs
+* https://github.com/richwolski/bluesky
