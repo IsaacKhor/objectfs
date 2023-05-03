@@ -11,19 +11,19 @@ set -eu
 echo "==============================="
 echo "=== Fileserver workload ======="
 echo "==============================="
-sudo filebench -f ./fileserver.f
+sudo filebench -f ./workload-fileserver.f
 
 echo "==============================="
 echo "=== Webserver workload  ======="
 echo "==============================="
-sudo filebench -f ./webserver.f
+sudo filebench -f ./workload-webserver.f
 
 echo "==============================="
 echo "=== Random Write        ======="
 echo "==============================="
-sudo filebench -f ./random_write.f
+sudo filebench -f ./workload-random-write.f
 
 echo "==============================="
 echo "=== Varmail workload    ======="
 echo "==============================="
-sudo filebench -f ./varmail.f
+sudo filebench -f ./workload-varmail.f
