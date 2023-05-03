@@ -3,7 +3,7 @@
 set -eu
 
 #url=$S3_HOSTNAME
-#key=$S3_ACCESS_KEY
+#key=$S3_ACCESS_KEY_ID
 #secret=$S3_SECRET_ACCESS_KEY
 #bucket=$1
 #python3 ./delete_bucket_files.py $url $bucket $key $secret

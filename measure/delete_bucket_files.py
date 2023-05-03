@@ -4,7 +4,7 @@ from boto3.s3.transfer import TransferConfig
 
 url = sys.environ['S3_HOSTNAME']
 bucket = sys.argv[2]
-access_key = sys.environ['S3_ACCESS_KEY']
+access_key = sys.environ['S3_ACCESS_KEY_ID']
 secret_key = sys.environ['S3_SECRET_ACCESS_KEY']
 
 s3 = boto3.resource('s3', endpoint_url=url, use_ssl=False, 
