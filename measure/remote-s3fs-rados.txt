@@ -1,0 +1,140 @@
+===============================
+=== Random Write        =======
+===============================
+Filebench Version 1.5-alpha3
+0.000: Allocated 177MB of shared memory
+0.002: Latency histogram enabled
+0.002: Random Write Version 3.0 personality successfully loaded
+0.002: Populating and pre-allocating filesets
+0.136: Removing largefile1 tree (if exists)
+0.272: Pre-allocating directories in largefile1 tree
+0.774: Pre-allocating files in largefile1 tree
+68.585: Waiting for pre-allocation to finish (in case of a parallel pre-allocation)
+68.585: Population and pre-allocation of filesets completed
+68.585: Starting 1 rand-write instances
+69.591: Running...
+129.599: Run took 60 seconds...
+129.600: Per-Operation Breakdown
+rand-write1          0ops        0ops/s   0.0mb/s    0.000ms/op [0.000ms - 0.000ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+129.600: IO Summary:     0 ops 0.000 ops/s 0/0 rd/wr   0.0mb/s 0.000ms/op
+129.600: Shutting down processes
+===============================
+=== Varmail workload    =======
+===============================
+Filebench Version 1.5-alpha3
+0.000: Allocated 177MB of shared memory
+0.002: Latency histogram enabled
+0.003: Varmail Version 3.0 personality successfully loaded
+0.003: Populating and pre-allocating filesets
+0.099: bigfileset populated: 1000 files, avg. dir. width = 1000000, avg. dir. depth = 0.5, 0 leafdirs, 14.959MB total size
+0.169: Removing bigfileset tree (if exists)
+0.309: Pre-allocating directories in bigfileset tree
+0.914: Pre-allocating files in bigfileset tree
+149.275: Waiting for pre-allocation to finish (in case of a parallel pre-allocation)
+149.275: Population and pre-allocation of filesets completed
+149.275: Starting 1 filereader instances
+150.283: Running...
+210.291: Run took 60 seconds...
+210.293: Per-Operation Breakdown
+closefile4           275ops        5ops/s   0.0mb/s    5.732ms/op [0.064ms - 139.893ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 31 185 4 9 4 9 4 4 0 19 4 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile4            275ops        5ops/s   0.1mb/s   13.116ms/op [3.743ms - 149.296ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 48 178 5 3 31 8 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile4            275ops        5ops/s   0.0mb/s   19.400ms/op [4.952ms - 271.563ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 76 157 9 12 17 3 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile3           275ops        5ops/s   0.0mb/s   12.345ms/op [2.587ms - 158.264ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 206 9 10 14 25 10 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+fsyncfile3           275ops        5ops/s   0.0mb/s   76.504ms/op [49.758ms - 245.466ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 95 173 7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+appendfilerand3      275ops        5ops/s   0.0mb/s    1.729ms/op [0.051ms - 57.972ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 23 203 28 8 0 0 1 0 2 8 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile3            275ops        5ops/s   0.1mb/s    8.225ms/op [3.810ms - 83.983ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 34 210 9 2 17 3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile3            275ops        5ops/s   0.0mb/s   20.496ms/op [5.334ms - 175.733ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 67 152 16 17 17 6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile2           275ops        5ops/s   0.0mb/s    5.618ms/op [2.842ms - 91.605ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 255 3 3 0 12 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+fsyncfile2           275ops        5ops/s   0.0mb/s   53.742ms/op [31.764ms - 166.289ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 244 26 4 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+appendfilerand2      275ops        5ops/s   0.0mb/s    4.513ms/op [0.123ms - 170.911ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 146 64 5 5 17 15 3 3 10 4 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+createfile2          275ops        5ops/s   0.0mb/s 1684.252ms/op [828.903ms - 2802.082ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 10 236 29 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+deletefile1          286ops        5ops/s   0.0mb/s 1482.152ms/op [42.308ms - 2451.261ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 4 2 2 6 28 230 14 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+210.293: IO Summary:  3586 ops 59.760 ops/s 9/9 rd/wr   0.2mb/s 264.349ms/op
+210.293: Shutting down processes
+===============================
+=== Fileserver workload =======
+===============================
+Filebench Version 1.5-alpha3
+0.000: Allocated 177MB of shared memory
+0.003: Latency histogram enabled
+0.003: Starting fileserver workload on /mnt/fsbench
+0.005: File-server Version 3.0 personality successfully loaded
+0.005: Populating and pre-allocating filesets
+0.023: bigfileset populated: 10000 files, avg. dir. width = 20, avg. dir. depth = 3.1, 0 leafdirs, 1240.757MB total size
+0.023: Removing bigfileset tree (if exists)
+40.841: Pre-allocating directories in bigfileset tree
+164.368: Pre-allocating files in bigfileset tree
+1696.701: Waiting for pre-allocation to finish (in case of a parallel pre-allocation)
+1696.701: Population and pre-allocation of filesets completed
+1696.701: Starting 1 filereader instances
+1697.711: Running...
+1757.720: Run took 60 seconds...
+1757.726: Per-Operation Breakdown
+statfile1            352ops        6ops/s   0.0mb/s  426.347ms/op [0.016ms - 2078.319ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 4 18 96 135 89 9 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+deletefile1          354ops        6ops/s   0.0mb/s 1349.577ms/op [44.911ms - 4231.962ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5 0 16 55 95 112 71 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile3           365ops        6ops/s   0.0mb/s  213.363ms/op [0.079ms - 1273.017ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 7 48 21 0 0 1 7 6 1 8 39 112 92 22 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile1            368ops        6ops/s   0.8mb/s  413.004ms/op [3.876ms - 1779.343ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2 48 6 3 4 25 77 102 68 33 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile2            370ops        6ops/s   0.0mb/s 1035.833ms/op [21.631ms - 3093.967ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 1 2 46 166 143 11 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile2           376ops        6ops/s   0.0mb/s  308.546ms/op [56.657ms - 944.931ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 4 84 86 162 40 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+appendfilerand1      378ops        6ops/s   0.0mb/s  401.728ms/op [0.160ms - 1564.202ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5 17 4 0 4 3 3 1 7 27 66 142 88 11 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile1            378ops        6ops/s   0.0mb/s 1042.874ms/op [8.364ms - 3061.582ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 1 3 45 163 160 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile1           384ops        6ops/s   0.0mb/s  294.733ms/op [42.147ms - 1278.857ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 49 47 100 146 37 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+wrtfile1             385ops        6ops/s   0.8mb/s  378.902ms/op [0.177ms - 2411.175ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3 17 15 2 2 4 0 4 9 39 84 113 74 18 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+createfile1          390ops        6ops/s   0.0mb/s 1969.426ms/op [116.797ms - 7521.131ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 6 5 34 87 124 101 33 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+1757.726: IO Summary:  4100 ops 68.326 ops/s 6/13 rd/wr   1.6mb/s 714.671ms/op
+1757.726: Shutting down processes
+===============================
+=== Webserver workload  =======
+===============================
+Filebench Version 1.5-alpha3
+0.000: Allocated 177MB of shared memory
+0.002: Latency histogram enabled
+0.004: Web-server Version 3.1 personality successfully loaded
+0.004: Populating and pre-allocating filesets
+0.061: logfiles populated: 1 files, avg. dir. width = 20, avg. dir. depth = 0.0, 0 leafdirs, 0.002MB total size
+0.117: Removing logfiles tree (if exists)
+0.229: Pre-allocating directories in logfiles tree
+0.759: Pre-allocating files in logfiles tree
+0.948: bigfileset populated: 1000 files, avg. dir. width = 20, avg. dir. depth = 2.3, 0 leafdirs, 14.760MB total size
+0.948: Removing bigfileset tree (if exists)
+534.604: Pre-allocating directories in bigfileset tree
+549.811: Pre-allocating files in bigfileset tree
+726.549: Waiting for pre-allocation to finish (in case of a parallel pre-allocation)
+726.549: Population and pre-allocation of filesets completed
+726.549: Starting 1 filereader instances
+727.564: Running...
+787.578: Run took 60 seconds...
+787.788: Per-Operation Breakdown
+appendlog            1048ops       17ops/s   0.1mb/s 3825.690ms/op [0.093ms - 11350.604ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 4 1 0 0 0 0 2 14 27 31 25 11 18 26 47 452 376 14 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile10          981ops       16ops/s   0.0mb/s   22.983ms/op [0.068ms - 193.061ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 90 159 25 0 0 9 37 167 307 110 70 7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile10           981ops       16ops/s   0.2mb/s   54.523ms/op [3.399ms - 467.091ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 70 162 83 341 171 64 23 67 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile10           982ops       16ops/s   0.0mb/s   90.501ms/op [7.895ms - 341.768ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 45 362 410 155 9 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile9           983ops       16ops/s   0.0mb/s   24.816ms/op [0.076ms - 234.793ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 86 144 14 2 1 10 49 134 317 149 69 8 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile9            983ops       16ops/s   0.2mb/s   65.771ms/op [3.336ms - 817.969ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 60 146 112 321 171 73 2 95 3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile9            984ops       16ops/s   0.0mb/s   86.449ms/op [16.637ms - 399.950ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 48 366 436 128 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile8           985ops       16ops/s   0.0mb/s   24.890ms/op [0.066ms - 194.913ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 95 127 16 0 1 9 31 154 312 161 73 6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile8            985ops       16ops/s   0.3mb/s   61.741ms/op [3.477ms - 1209.867ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 77 179 90 319 165 52 5 94 3 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile8            986ops       16ops/s   0.0mb/s   88.678ms/op [16.415ms - 313.960ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 40 330 484 122 9 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile7           986ops       16ops/s   0.0mb/s   24.440ms/op [0.071ms - 248.386ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 75 160 20 2 1 10 43 152 286 160 69 8 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile7            987ops       16ops/s   0.2mb/s   62.563ms/op [3.410ms - 518.858ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 71 147 105 325 166 70 7 96 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile7            988ops       16ops/s   0.0mb/s   90.083ms/op [18.359ms - 402.821ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 36 349 440 156 7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile6           988ops       16ops/s   0.0mb/s   23.153ms/op [0.079ms - 206.278ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 85 184 19 0 1 11 43 143 297 127 68 10 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile6            988ops       16ops/s   0.2mb/s   62.411ms/op [3.594ms - 777.973ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 68 159 82 336 175 67 5 93 3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile6            989ops       16ops/s   0.0mb/s   87.329ms/op [11.593ms - 317.737ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 48 340 464 134 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile5           991ops       17ops/s   0.0mb/s   23.080ms/op [0.074ms - 231.962ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 73 187 14 1 2 10 34 152 304 151 55 8 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile5            991ops       17ops/s   0.2mb/s   55.302ms/op [3.381ms - 498.295ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 75 190 107 312 154 54 6 93 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile5            992ops       17ops/s   0.0mb/s   90.016ms/op [19.164ms - 318.307ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 26 322 498 143 3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile4           994ops       17ops/s   0.0mb/s   22.633ms/op [0.072ms - 182.025ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 91 155 20 1 2 13 35 147 309 161 56 4 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile4            994ops       17ops/s   0.2mb/s   55.378ms/op [3.509ms - 655.325ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 72 178 106 323 152 60 18 80 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile4            996ops       17ops/s   0.0mb/s   90.578ms/op [19.186ms - 454.326ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 39 347 449 153 8 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile3           996ops       17ops/s   0.0mb/s   24.527ms/op [0.080ms - 191.389ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 77 138 20 1 0 4 33 156 333 166 63 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile3            997ops       17ops/s   0.2mb/s   63.864ms/op [3.535ms - 843.055ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 77 167 108 325 150 68 2 95 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile3            999ops       17ops/s   0.0mb/s   92.180ms/op [17.535ms - 456.708ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 44 366 420 158 11 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile2           1000ops       17ops/s   0.0mb/s   23.949ms/op [0.076ms - 155.730ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 68 168 25 2 0 13 33 141 325 158 58 9 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile2            1000ops       17ops/s   0.2mb/s   64.622ms/op [3.322ms - 797.992ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 62 201 87 313 165 68 7 94 3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile2            1000ops       17ops/s   0.0mb/s   93.719ms/op [15.505ms - 441.629ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 47 329 455 153 15 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+closefile1           1001ops       17ops/s   0.0mb/s   24.697ms/op [0.063ms - 267.686ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 99 151 14 1 0 6 41 145 329 138 64 12 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+readfile1            1001ops       17ops/s   0.3mb/s   44.142ms/op [3.378ms - 445.144ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 85 199 102 300 166 74 42 33 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+openfile1            1003ops       17ops/s   0.0mb/s   92.970ms/op [8.870ms - 427.358ms]	[ 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 6 27 352 460 139 19 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
+787.788: IO Summary: 30779 ops 512.932 ops/s 165/17 rd/wr   2.6mb/s 186.043ms/op
+787.788: Shutting down processes
