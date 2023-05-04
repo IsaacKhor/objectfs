@@ -9,6 +9,16 @@ set -eu
 #python3 ./delete_bucket_files.py $url $bucket $key $secret
 
 echo "==============================="
+echo "=== Random Write        ======="
+echo "==============================="
+sudo filebench -f ./workload-random-write.f
+
+echo "==============================="
+echo "=== Varmail workload    ======="
+echo "==============================="
+sudo filebench -f ./workload-varmail.f
+
+echo "==============================="
 echo "=== Fileserver workload ======="
 echo "==============================="
 sudo filebench -f ./workload-fileserver.f
@@ -18,12 +28,3 @@ echo "=== Webserver workload  ======="
 echo "==============================="
 sudo filebench -f ./workload-webserver.f
 
-echo "==============================="
-echo "=== Random Write        ======="
-echo "==============================="
-sudo filebench -f ./workload-random-write.f
-
-echo "==============================="
-echo "=== Varmail workload    ======="
-echo "==============================="
-sudo filebench -f ./workload-varmail.f
