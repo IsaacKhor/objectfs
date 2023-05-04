@@ -51,6 +51,7 @@ __pycache__/
 # measurement
 measure/passwd-s3fs
 code/s3.config
+*.db
 
 objfs-mount
 s3.config

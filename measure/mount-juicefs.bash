@@ -6,6 +6,7 @@ echo "Starting JuiceFS with backend $S3_HOSTNAME and bucket $S3_TEST_BUCKET_NAME
 
 s3 -u create $S3_TEST_BUCKET_NAME
 python3 delete_bucket_files.py $S3_TEST_BUCKET_NAME
+rm -f myjfs.db
 
 juicefs format --storage minio \
     --bucket http://$S3_HOSTNAME/$S3_TEST_BUCKET_NAME \
@@ -14,4 +15,4 @@ juicefs format --storage minio \
     sqlite3://myjfs.db \
 	myjfs
 
-juicefs mount -f sqlite3://myjfs.db /mnt/fsbench
+sudo juicefs mount sqlite3://myjfs.db /mnt/fsbench
