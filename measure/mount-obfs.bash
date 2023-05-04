@@ -1,5 +1,8 @@
 #!/bin/bash
 
+set -u
+echo "Starting OBFS with backend $S3_HOSTNAME and bucket $S3_TEST_BUCKET_NAME"
+
 sudo umount -l /mnt/fsbench
 
 export S3_TEST_BUCKET_NAME='obfs-test'
