@@ -1,6 +1,61 @@
 \section{Evaluation}
 \label{sec:evaluation}
 
-Our ObFS prototype is a FUSE file system implemented in roughly 2000 lines of C++.
-It performs garbage collection and checkpointing, but does not yet implement snapshots, clone, overlays, or partial checkpoints.
-We have verified its functionality against a local S3 object store\footnote{Based on Ceph Rados Gateway (RGW).}, but do not yet have performance results.
+Our prototype of ObjectFS is a FUSE filesystem implemented in roughly 2000
+lines of C++. It performs garbage collection and checkpointing, but does not
+yet implement snapshopts, cloning, overlays, or partial checkpoints.
+
+In order to evaluate performance improvements in our filesystem, we evaluate
+ObjectFS on a set of micro-I/O benchmarks workloads with Filebench
+\citep{filebench} and compare its performance with S3FS and JuiceFS.
+
+\subsection{Experimental Setup}
+
+All three filesystems were mounted on a sigle machine within a cluster with a
+Ceph RGW instance as the backend. The backend store is emptied of all objects
+and the filesystems re-created between each run.
+
+... something about the machine specs and backend setup
+
+\subsection{Filebench results}
+
+We evaluate all three filesystems on four filebench workloads: fileserver,
+webserver, varmail, and random-write.
+
+\begin{table}
+	\caption{Total op/s comparison for each workload}
+	\label{dataset}
+	\centering
+	\begin{tabular}{lrrrr}
+		\toprule
+		Workload     & ObFS  & S3FS & JuiceFS \\
+		\midrule
+		Fileserver   & 1745  & 670  & ---     \\
+		Webserver    & 2385  & 1547 & ---     \\
+		Varmail      & 2634  & 1150 & ---     \\
+		Random write & 11001 & 463  & ---     \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\begin{table}
+	\caption{Cluster Ceph RGWs}
+	\label{rgws}
+	\centering
+	\begin{tabular}{lrrrr}
+		\toprule
+		Workload     & ObFS  & S3FS & JuiceFS \\
+		\midrule
+		Fileserver   & 1745  & 670  & ---     \\
+		Webserver    & 2385  & 1547 & ---     \\
+		Varmail      & 2634  & 1150 & ---     \\
+		Random write & 11001 & 463  & ---     \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+
+
+
+
+

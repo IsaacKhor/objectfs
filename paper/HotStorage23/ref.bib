@@ -1,30 +1,17 @@
-@book{lamport94,
-    author    = "Leslie Lamport",
-    title     = "{\LaTeX: A Document Preparation System}",
-    year      = "1994",
-    publisher = "Addison-Wesley",
-    edition = "2nd",
-    address   = "Reading, Massachusetts"
-}
-
-@inproceedings{nicepaper,
-  author = "Firstname1 Lastname1 and Firstname2 Lastname2 and Firstname3 Lastname3 and Firstname4 Lastname4",
-  title = "{A Very Nice Paper To Cite}",
-  booktitle = {Intl.\ Symp.\ on One Thing},
-  year = {2000},
-  month = {July},
-  pages = {200-211},
-  publisher = {University of Fun},
-  address = {London, UK}
-}
-
-@inproceedings{nicepaper2,
-  author = "Firstname1 Lastname1 and Firstname2 Lastname2",
-  title = "{Another Very Nice Paper To Cite}",
-  booktitle = {Intl.\ Symp.\ on Another Thing},
-  year = {2001},
-  month = {May},
-  pages = {12-22},
-  publisher = {University of Games},
-  address = {NY, USA}
+@inproceedings{lsvd,
+  author    = {Hajkazemi, Mohammad Hossein and Aschenbrenner, Vojtech and Abdi, Mania and Kaynar, Emine Ugur and Mossayebzadeh, Amin and Krieger, Orran and Desnoyers, Peter},
+  title     = {Beating the I/O Bottleneck: A Case for Log-Structured Virtual Disks},
+  year      = {2022},
+  isbn      = {9781450391627},
+  publisher = {Association for Computing Machinery},
+  address   = {New York, NY, USA},
+  url       = {https://doi.org/10.1145/3492321.3524271},
+  doi       = {10.1145/3492321.3524271},
+  abstract  = {With the increasing dominance of SSDs for local storage, today's network mounted virtual disks can no longer offer competitive performance. We propose a Log-Structured Virtual Disk (LSVD) that couples log-structured approaches at both the cache and storage layer to provide a virtual disk on top of S3-like storage. Both cache and backend store are order-preserving, enabling LSVD to provide strong consistency guarantees in case of failure. Our prototype demonstrates that the approach preserves all the advantages of virtual disks, while offering dramatic performance improvements over not only commonly used virtual disks, but the same disks combined with inconsistent (i.e. unsafe) local caching.},
+  booktitle = {Proceedings of the Seventeenth European Conference on Computer Systems},
+  pages     = {628–643},
+  numpages  = {16},
+  keywords  = {virtual disk, cloud computing, block storage},
+  location  = {Rennes, France},
+  series    = {EuroSys '22}
 }
