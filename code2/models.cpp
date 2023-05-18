@@ -22,75 +22,74 @@ FSObject::create_directory(inum_t parent_inum, inum_t self_inum, mode_t perms)
     return fo;
 }
 
-/**
- * The extents code is mostly unchanged from the old implementation and was not
- * rewritten.
- */
-
-// returns one of:
-// - extent containing @offset
-// - lowest extent with base > @offset
-// - end()
-internal_map::iterator FSFileExtentMap::lookup(int64_t offset)
+std::vector<std::pair<int64_t, ObjectSegment>>
+FSFile::segments_in_range(int64_t range_offset, size_t range_len)
 {
-    auto it = the_map.lower_bound(offset);
-    if (it == the_map.end())
-        return it;
-    auto &[base, e] = *it;
-    if (base > offset && it != the_map.begin()) {
+    std::vector<std::pair<int64_t, ObjectSegment>> res;
+    if (extents_map.empty())
+        return res;
+
+    auto it = extents_map.lower_bound(range_offset);
+
+    // File does not contain any such segment
+    if (it == extents_map.end())
+        return res;
+
+    // lower bound gives us >= offset, so we want to go back to the 1st element
+    // that is <= offset and then iterate forward
+    if (it->first > range_offset && it != extents_map.begin())
         it--;
-        auto &[base0, e0] = *it;
-        if (offset < base0 + e0.len)
-            return it;
-        it++;
-    }
-    return it;
-}
 
-std::vector<ObjectSegment> FSFileExtentMap::find_in_range(int64_t offset,
-                                                          size_t len)
-{
-    std::vector<ObjectSegment> ret;
-    auto it = lookup(offset);
-    while (it != the_map.end()) {
-        auto &[base, e] = *it;
-        if (base >= offset + len)
+    while (it != extents_map.end()) {
+        auto [extent_offset, extent_segment] = *it;
+        if (extent_offset >= range_offset + range_len)
             break;
-        ret.push_back(e);
+
+        res.push_back(*it);
         it++;
     }
-    return ret;
+
+    // Adjust first and last segment to match the range we're looking for
+    // in the case that the range starts or ends in the middle of an extent
+    auto &[front_offset, front_seg] = res.front();
+    auto front_adjust = range_offset - front_offset;
+    front_seg.offset += front_adjust;
+    front_seg.len -= front_adjust;
+
+    auto &end_seg = res.back().second;
+    if (end_seg.offset + end_seg.len > range_offset + range_len)
+        end_seg.len = range_offset + range_len - end_seg.offset;
+
+    return res;
 }
 
-/**
- * Insert a new extent into the map. If the new extent overlaps with
- * existing extents, the existing extents are chopped off to make room
- * for the new one.
- */
-void FSFileExtentMap::update(int64_t offset, ObjectSegment e)
+void FSFile::insert_segment(int64_t offset, ObjectSegment e)
 {
+    /**
+     * Implementation copied directly from old implementation with no changes
+     */
     // two special cases
     // (1) map is empty - just add and we're done
     //
-    if (the_map.empty()) {
-        the_map[offset] = e;
+    if (extents_map.empty()) {
+        extents_map[offset] = e;
         return;
     }
 
     // extending the last extent
     //
-    auto [key, val] = *(--the_map.end());
+    auto [key, val] = *(--extents_map.end());
     if (offset == key + val.len && e.offset == val.offset + val.len) {
         val.len += e.len;
-        the_map[key] = val;
+        extents_map[key] = val;
         return;
     }
 
-    auto it = the_map.lower_bound(offset);
+    auto it = extents_map.lower_bound(offset);
 
     // we're at the the end of the list
-    if (it == the_map.end()) {
-        the_map[offset] = e;
+    if (it == extents_map.end()) {
+        extents_map[offset] = e;
         return;
     }
 
@@ -99,16 +98,16 @@ void FSFileExtentMap::update(int64_t offset, ObjectSegment e)
     //   +++++++++++++++++
     // = +++++++++++++++++
     //
-    while (it != the_map.end()) {
+    while (it != extents_map.end()) {
         auto [key, val] = *it;
         if (key >= offset && key + val.len <= offset + e.len) {
             it++;
-            the_map.erase(key);
+            extents_map.erase(key);
         } else
             break;
     }
 
-    if (it != the_map.end()) {
+    if (it != extents_map.end()) {
         // update right-hand overlap
         //        ---------
         //   ++++++++++
@@ -120,13 +119,13 @@ void FSFileExtentMap::update(int64_t offset, ObjectSegment e)
             auto new_key = offset + e.len;
             val.len -= (new_key - key);
             val.offset += (new_key - key);
-            the_map.erase(key);
-            the_map[new_key] = val;
+            extents_map.erase(key);
+            extents_map[new_key] = val;
         }
     }
 
-    it = the_map.lower_bound(offset);
-    if (it != the_map.begin()) {
+    it = extents_map.lower_bound(offset);
+    if (it != extents_map.begin()) {
         it--;
         auto [key, val] = *it;
 
@@ -138,10 +137,10 @@ void FSFileExtentMap::update(int64_t offset, ObjectSegment e)
             auto new_key = offset + e.len;
             auto new_len = val.len - (new_key - key);
             val.len = offset - key;
-            the_map[key] = val;
+            extents_map[key] = val;
             val.offset += (new_key - key);
             val.len = new_len;
-            the_map[new_key] = val;
+            extents_map[new_key] = val;
         }
 
         // left-hand overlap
@@ -151,22 +150,20 @@ void FSFileExtentMap::update(int64_t offset, ObjectSegment e)
         //
         else if (key < offset && key + val.len > offset) {
             val.len = offset - key;
-            the_map[key] = val;
+            extents_map[key] = val;
         }
     }
 
-    the_map[offset] = e;
+    extents_map[offset] = e;
 }
 
-std::vector<ObjectSegment> FSFile::segments_in_extent(int64_t offset,
-                                                      size_t len)
+size_t FSFile::size()
 {
-    return extents->find_in_range(offset, len);
-}
+    if (extents_map.empty())
+        return 0;
 
-void FSFile::insert_segment(int64_t offset, ObjectSegment e)
-{
-    extents->update(offset, e);
+    auto last = *std::prev(extents_map.end());
+    return last.first + last.second.len;
 }
 
 void FSDirectory::add_child(std::string name, inum_t inum)

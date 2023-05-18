@@ -24,34 +24,10 @@ struct ObjectSegment {
     size_t len;
 };
 
-typedef std::map<int64_t, ObjectSegment> internal_map;
-class FSFileExtentMap
-{
-  public:
-    internal_map the_map;
-
-    /**
-     * Returns either:
-     * - the extent containing the offset
-     * - The lowest extent where the base > offset
-     * - The last element of the map
-     */
-    internal_map::iterator lookup(int64_t offset);
-
-    std::vector<ObjectSegment> find_in_range(int64_t offset, size_t len);
-
-    /**
-     * Insert a new extent into the map. If the new extent overlaps with
-     * existing extents, the existing extents are chopped off to make room
-     * for the new one.
-     */
-    void update(int64_t offset, ObjectSegment e);
-};
-
 class FSFile
 {
   private:
-    std::unique_ptr<FSFileExtentMap> extents;
+    std::map<int64_t, ObjectSegment> extents_map;
 
     explicit FSFile(FSFile &other) = delete;
     FSFile &operator=(FSFile &other) = delete;
@@ -61,7 +37,18 @@ class FSFile
     explicit FSFile(FSFile &&other) = default;
     FSFile &operator=(FSFile &&other) = default;
 
-    std::vector<ObjectSegment> segments_in_extent(int64_t offset, size_t len);
+    /**
+     * List of all segments in the specified range, with the first and last
+     * segment truncated to match the boundaries of the range.
+     */
+    std::vector<std::pair<int64_t, ObjectSegment>>
+    segments_in_range(int64_t offset, size_t len);
+
+    /**
+     * Insert a new extent into the map. If the new extent overlaps with
+     * existing extents, the existing extents are chopped off to make room
+     * for the new one.
+     */
     void insert_segment(int64_t offset, ObjectSegment e);
     ssize_t truncate_to(size_t new_size);
     size_t size();

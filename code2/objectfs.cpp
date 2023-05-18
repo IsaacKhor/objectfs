@@ -110,8 +110,7 @@ int ObjectFS::delete_file(std::string path)
 
     auto filename = path.substr(path.find_last_of('/') + 1);
     {
-        std::unique_lock<std::shared_mutex> lock(fsobj->mtx);
-        std::unique_lock<std::shared_mutex> parent_lock(parent_obj->mtx);
+        std::scoped_lock lock(fsobj->mtx, parent_obj->mtx);
 
         obj_backend.append_logobj(logobj);
         parent_dir.remove_child(filename);
@@ -132,6 +131,8 @@ int ObjectFS::read_file(inum_t inum, size_t offset, size_t len, byte *buf)
     if (!fsobj->is_file())
         return -EISDIR;
 
+    auto &file = fsobj->get_file();
+
     // Get all extents that overlap with the file in question. This is the only
     // time we need to lock the file because once we get the extents, we can
     // just read from the backend without locking.
@@ -139,15 +140,14 @@ int ObjectFS::read_file(inum_t inum, size_t offset, size_t len, byte *buf)
     // somewhere else, then grab a write lock to modify extents. Only after the
     // extents are written do we delete the old data. This way, we don't need to
     // worry about the objects disappearing underneath us
-    std::vector<ObjectSegment> extents;
+    std::vector<std::pair<int64_t, ObjectSegment>> extents;
     {
         std::shared_lock<std::shared_mutex> lock(fsobj->mtx);
-        auto &file = fsobj->get_file();
-        extents = file.segments_in_extent(offset, len);
+        extents = file.segments_in_range(offset, len);
     }
 
-    for (auto &extent : extents) {
-        obj_backend.get_obj_segment(extent, buf + extent.offset);
+    for (auto &[file_offest, segment] : extents) {
+        obj_backend.get_obj_segment(segment, buf + file_offest);
     }
 
     return len;
@@ -174,7 +174,7 @@ int ObjectFS::write_file(inum_t inum, size_t offset, size_t len, byte *buf)
     // inode map before us, causing a later write on the log to be applied
     // to the inode map earlier
     {
-        std::unique_lock<std::shared_mutex> lock(fsobj->mtx);
+        std::unique_lock lock(fsobj->mtx);
 
         auto log_obj_seg = obj_backend.append_data(inum, offset, len, buf);
 
@@ -444,9 +444,14 @@ std::optional<inum_t> ObjectFS::path_to_inode_num(std::string path)
         if (!cur_inode.value()->is_directory())
             return std::nullopt;
 
-        auto &dir = cur_inode.value()->get_directory();
+        auto fsobj = cur_inode.value();
+        auto &dir = fsobj->get_directory();
 
-        auto child = dir.get_child(*it);
+        std::optional<inum_t> child;
+        {
+            std::shared_lock lock(fsobj->mtx);
+            child = dir.get_child(*it);
+        }
         if (!child.has_value())
             return std::nullopt;
 
