@@ -1,17 +1,20 @@
 #!/usr/bin/python3
 import unittest
 import objtest as obj
-import os, sys
+import os
+import sys
 import ctypes
 import shutil
 
 prefix = 'prefix1'
 
+
 def div_round_up(n, m):
     return (n + m - 1) // m
 
+
 def longest(a, b):
-    L = min(len(a),len(b))
+    L = min(len(a), len(b))
     n = L//2
     i = n
     while i > 0:
@@ -26,44 +29,45 @@ def longest(a, b):
         n -= 1
     return n
 
+
 class tests(unittest.TestCase):
 
     def assertOK(self, code, _msg):
         self.assertTrue(code >= 0, msg=_msg + ' : ' + obj.strerr(code))
-    
+
     def test_01_mkdir(self):
         print('Test 1, mkdir (top level):')
         obj.init(prefix)
 
         dirs = (('/test1', 0o755), ('/test2', 0o700), ('/test3', 0o777))
-        for path,mode in dirs:
+        for path, mode in dirs:
             v = obj.mkdir(path, mode)
             self.assertOK(v, 'mkdir %s %o' % (path, mode))
 
-        for path,mode in dirs:
-            v,sb = obj.getattr(path)
+        for path, mode in dirs:
+            v, sb = obj.getattr(path)
             self.assertOK(v, 'getattr %s' % path)
             self.assertEqual(sb.st_mode, (obj.S_IFDIR | mode),
-                                 msg=('getattr %s: mode %o (should be %o)' %
-                                          (path, sb.st_mode, (obj.S_IFDIR | mode))))
-            v,des = obj.readdir(path)
+                             msg=('getattr %s: mode %o (should be %o)' %
+                                  (path, sb.st_mode, (obj.S_IFDIR | mode))))
+            v, des = obj.readdir(path)
             self.assertOK(v, 'readdir %s' % path)
             self.assertEqual(len(des), 0,
-                                 msg='readdir %s: %d results (should be 0)' % (path, len(des)))
+                             msg='readdir %s: %d results (should be 0)' % (path, len(des)))
         obj.sync()
         obj.teardown()
         obj.init(prefix)
-        
-        for path,mode in dirs:
-            v,sb = obj.getattr(path)
+
+        for path, mode in dirs:
+            v, sb = obj.getattr(path)
             self.assertOK(v, 'getattr %s' % path)
             self.assertEqual(sb.st_mode, (obj.S_IFDIR | mode),
-                                 msg=('getattr %s: mode %o (should be %o)' %
-                                          (path, sb.st_mode, (obj.S_IFDIR | mode))))
-            v,des = obj.readdir(path)
+                             msg=('getattr %s: mode %o (should be %o)' %
+                                  (path, sb.st_mode, (obj.S_IFDIR | mode))))
+            v, des = obj.readdir(path)
             self.assertOK(v, 'readdir %s' % path)
             self.assertEqual(len(des), 0,
-                                 msg='readdir %s: %d results (should be 0)' % (path, len(des)))
+                             msg='readdir %s: %d results (should be 0)' % (path, len(des)))
         obj.teardown()
         # FSCK???
 
@@ -72,19 +76,19 @@ class tests(unittest.TestCase):
             path = top + '/' + d
             if mkdir:
                 v = obj.mkdir(path, 0o777)
-                self.assertOK(v,'check_dirs: mkdir %s' % path)
-                v,sb = obj.getattr(path)
+                self.assertOK(v, 'check_dirs: mkdir %s' % path)
+                v, sb = obj.getattr(path)
                 self.assertOK(v, 'check_dirs %s: getattr' % path)
                 self.assertEqual(sb.st_mode & obj.S_IFMT, obj.S_IFDIR,
-                                     msg=('check_dirs: mode=%o (%o not set)' %
-                                              (sb.st_mode,obj.S_IFDIR)))
+                                 msg=('check_dirs: mode=%o (%o not set)' %
+                                      (sb.st_mode, obj.S_IFDIR)))
 
-        v,des = obj.readdir(top)
+        v, des = obj.readdir(top)
         self.assertOK(v, 'readdir %s' % top)
         names = set([str(de.name, 'UTF-8') for de in des])
         self.assertEqual(names, set(dirs), msg=('check_dirs: readdir: expected %s, got %s' %
-                                                    (' '.join(names), ' '.join(dirs))))
-        
+                                                (' '.join(names), ' '.join(dirs))))
+
     def test_02_mkdir(self):
         print('Test 2, mkdir (subdirectories)')
 
@@ -95,7 +99,7 @@ class tests(unittest.TestCase):
         for path in topdirs:
             v = obj.mkdir(path, 0o777)
             self.assertOK(v, 'mkdir %s' % path)
-        
+
         print('3 subdirs...')
         self.check_dirs(True, topdirs[0], ['dir%d' % i for i in range(3)])
 
@@ -125,28 +129,28 @@ class tests(unittest.TestCase):
             path = top + '/' + f
             v = obj.create(path, mode)
             self.assertOK(v, 'check_files: create %s' % path)
-            v,sb = obj.getattr(path)
+            v, sb = obj.getattr(path)
             self.assertOK(v, 'check_files: getattr %s' % path)
             self.assertEqual(sb.st_mode & obj.S_IFMT, obj.S_IFREG,
-                                 msg='check_files: getattr: %o not set' % obj.S_IFREG)
+                             msg='check_files: getattr: %o not set' % obj.S_IFREG)
             self.assertEqual(sb.st_size, 0, msg='check_files: st_size != 0')
-            
+
     def check_files(self, top, files, mode):
-        v,des = obj.readdir(top)
+        v, des = obj.readdir(top)
         self.assertOK(v, 'readdir %s' % top)
-        names = set([str(de.name,'UTF-8') for de in des])
+        names = set([str(de.name, 'UTF-8') for de in des])
         self.assertEqual(names, set(files), msg=('readir: got "%s" (not "%s")' %
-                                                     (' '.join(names), ' '.join(files))))
+                                                 (' '.join(names), ' '.join(files))))
         for de in des:
             self.assertEqual(de.st_mode & 0o777, mode,
-                                 msg=('readdir: %s: mode=%o (should be %o)' %
-                                          (de.name, de.st_mode & 0o777, mode)))
+                             msg=('readdir: %s: mode=%o (should be %o)' %
+                                  (de.name, de.st_mode & 0o777, mode)))
 
     def test_03_create(self):
         print('Test 3, create')
 
         obj.init(prefix)
-        
+
         # create new directories to make test standalone
         topdirs = ['/test3_%d' % i for i in range(3)]
         for path in topdirs:
@@ -169,7 +173,7 @@ class tests(unittest.TestCase):
         obj.sync()
         obj.teardown()
         obj.init(prefix)
-        
+
         print('3 files...')
         self.check_files(topdirs[0], ('file1', 'file2', 'file3'), 0o777)
 
@@ -179,7 +183,7 @@ class tests(unittest.TestCase):
         print('32 files...')
         self.check_files(topdirs[2], ['file%d' % i for i in range(31)], 0o500)
         obj.teardown()
-        
+
     def test_04_create(self):
         print('Test 4, long names')
 
@@ -190,23 +194,23 @@ class tests(unittest.TestCase):
         self.assertOK(v, 'mkdir %s' % topdir)
 
         names = ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '00000000000000000000000000',
-                     'CASEtest', 'casetest', 'CASETEST')
+                 'CASEtest', 'casetest', 'CASETEST')
         for n in names:
             path = topdir + '/' + n
             v = obj.create(path, 0o777)
             self.assertOK(v, 'create %s' % path)
-            
+
         longname = 'b' * 100
         path = topdir + '/' + longname
         v = obj.create(path, 0o777)
         self.assertOK(v, 'create %s' % path)
 
-        v,sb = obj.getattr(path)
+        v, sb = obj.getattr(path)
         self.assertOK(v, 'getattr %s' % path)
-        
-        v,des = obj.readdir(topdir)
+
+        v, des = obj.readdir(topdir)
         self.assertOK(v, 'readdir %s' % topdir)
-        names = [str(de.name,'UTF-8') for de in des]
+        names = [str(de.name, 'UTF-8') for de in des]
         trimmed_name = longname
         self.assertTrue(trimmed_name in names)
 
@@ -215,12 +219,12 @@ class tests(unittest.TestCase):
         obj.teardown()
         obj.init(prefix)
 
-        v,sb = obj.getattr(path)
+        v, sb = obj.getattr(path)
         self.assertOK(v, 'getattr %s' % path)
-        
-        v,des = obj.readdir(topdir)
+
+        v, des = obj.readdir(topdir)
         self.assertOK(v, 'readdir %s' % topdir)
-        names = [str(de.name,'UTF-8') for de in des]
+        names = [str(de.name, 'UTF-8') for de in des]
         self.assertTrue(longname in names)
         obj.teardown()
 
@@ -235,33 +239,35 @@ class tests(unittest.TestCase):
 
         obj.create(topdir+'/file', 0o777)
         self.assertOK(v, 'mkdir %s' % (topdir+'/file'))
-        
+
         v = obj.mkdir(topdir + '/dir', 0o777)
         self.assertOK(v, 'mkdir %s' % (topdir + '/dir'))
 
         tests = [('doesntexist/path', -obj.ENOENT),
-                     ('file/path', -obj.ENOTDIR),
-                     ('dir', -obj.EEXIST),
-                     ('file', -obj.EEXIST)]
+                 ('file/path', -obj.ENOTDIR),
+                 ('dir', -obj.EEXIST),
+                 ('file', -obj.EEXIST)]
 
-        print(' create:',end='')
-        for path,err in tests:
+        print(' create:', end='')
+        for path, err in tests:
             v = obj.create(topdir+'/'+path, 0o777)
             print(' ', path, ':', obj.strerr(v))
-            self.assertEqual(v, err, msg="path=%s err=%d (not %d)" % (path,v, err))
+            self.assertEqual(
+                v, err, msg="path=%s err=%d (not %d)" % (path, v, err))
 
-        print('\n mkdir:',end='')
-        for path,err in tests:
+        print('\n mkdir:', end='')
+        for path, err in tests:
             print(' ', path, ':', obj.strerr(v))
             v = obj.mkdir(topdir+'/'+path, 0o777)
-            self.assertEqual(v, err, msg="path=%s err=%d (not %d)" % (path,v, err))
+            self.assertEqual(
+                v, err, msg="path=%s err=%d (not %d)" % (path, v, err))
         obj.teardown()
 
     def do_write(self, path, filesz, opsz):
         v = obj.create(path, 0o777)
         self.assertOK(v, 'create %s' % path)
 
-        print( path, filesz, opsz)
+        print(path, filesz, opsz)
         data = b'1234567' * div_round_up(filesz, 7)
         data = data[0:filesz]
 
@@ -269,24 +275,26 @@ class tests(unittest.TestCase):
             nbytes = min(filesz-offset, opsz)
             chunk = data[offset:offset+nbytes]
             v = obj.write(path, chunk, offset)
-            self.assertOK(v, 'write %s offset=%d len=%d' % (path, offset, len(chunk)))
+            self.assertOK(v, 'write %s offset=%d len=%d' %
+                          (path, offset, len(chunk)))
             self.assertTrue(v, len(chunk))
-        
+
     def check_write(self, path, filesz, opsz):
         data = b'1234567' * div_round_up(filesz, 7)
         data = data[0:filesz]
         if filesz == 37000 and opsz == 17:
             obj.lib.test_function(ctypes.c_int(0))
-        v,data2 = obj.read(path, len(data),0)
+        v, data2 = obj.read(path, len(data), 0)
         self.assertOK(v, 'read %s len=%d' % (path, len(data)))
         if data != data2:
-            i = longest(data,data2)
-            print('len=%d missmatch at %d' % (len(data), longest(data,data2)))
-            print('mismatch: data="', data[i:i+8], '" data2="', data2[i:i+8], '"')
+            i = longest(data, data2)
+            print('len=%d missmatch at %d' % (len(data), longest(data, data2)))
+            print('mismatch: data="', data[i:i+8],
+                  '" data2="', data2[i:i+8], '"')
 
-        self.assertTrue(data2 == data, msg='path=%s len(data2)=%d,len(data)=%d' % (path, len(data2),len(data)))
+        self.assertTrue(data2 == data, msg='path=%s len(data2)=%d,len(data)=%d' % (
+            path, len(data2), len(data)))
 
-    
     def test_06_write(self):
         print('Test 6, write')
 
@@ -317,7 +325,7 @@ class tests(unittest.TestCase):
         obj.sync()
         obj.teardown()
         obj.init(prefix)
-        
+
         for n in filesizes:
             dir = 'dir-%d' % n
             dd = topdir + '/' + dir
@@ -327,7 +335,7 @@ class tests(unittest.TestCase):
         obj.teardown()
 
     def test_07_unlink(self):
-        print( 'Test 7, unlink')
+        print('Test 7, unlink')
 
         obj.init(prefix)
         topdir = '/test7'
@@ -347,23 +355,25 @@ class tests(unittest.TestCase):
             self.assertOK(v, 'write %s, %d bytes' % (path, len(data)))
 
         for path in files:
-            print( path)
+            print(path)
             v = obj.unlink(path)
             self.assertOK(v, 'unlink %s' % path)
-            v,sb = obj.getattr(path)
-            self.assertEqual(-v, obj.ENOENT, msg='pre-sync: %s not deleted' % path)
-            
+            v, sb = obj.getattr(path)
+            self.assertEqual(-v, obj.ENOENT,
+                             msg='pre-sync: %s not deleted' % path)
+
         obj.sync()
         obj.teardown()
         obj.init(prefix)
 
         for path in files:
-            v,sb = obj.getattr(path)
-            self.assertEqual(-v, obj.ENOENT, msg='post-sync: %s not deleted' % path)
+            v, sb = obj.getattr(path)
+            self.assertEqual(-v, obj.ENOENT,
+                             msg='post-sync: %s not deleted' % path)
         obj.teardown()
 
     def test_08_rmdir_unlink(self):
-        print( 'Test 8, rmdir')
+        print('Test 8, rmdir')
 
         obj.init(prefix)
 
@@ -395,30 +405,34 @@ class tests(unittest.TestCase):
         self.assertEqual(v, -obj.ENOTEMPTY, msg='rmdir(dir1) err=%d' % v)
 
         v = obj.unlink(topdir + '/dir3')
-        self.assertEqual(v, -obj.EISDIR, msg='unlink(dir3) [directory] err=%d' % v)
+        self.assertEqual(
+            v, -obj.EISDIR, msg='unlink(dir3) [directory] err=%d' % v)
 
         v = obj.unlink(topdir + '/dir1/a')
-        self.assertEqual(v, -obj.EISDIR, msg='unlink(dir1/a) [directory] err=%d' % v)
+        self.assertEqual(
+            v, -obj.EISDIR, msg='unlink(dir1/a) [directory] err=%d' % v)
 
         for d in ('/dir3', '/dir1/a', '/dir1/b'):
             v = obj.rmdir(topdir + d)
             self.assertOK(v, 'rmdir(%s)' % (topdir+d))
 
         for d in ('/dir3', '/dir1/a', '/dir1/b'):
-            v,sb = obj.getattr(topdir + d)
-            self.assertEqual(v, -obj.ENOENT, msg='pre-sync %s not removed' % (topdir+d))
+            v, sb = obj.getattr(topdir + d)
+            self.assertEqual(
+                v, -obj.ENOENT, msg='pre-sync %s not removed' % (topdir+d))
 
         obj.sync()
         obj.teardown()
         obj.init(prefix)
-            
+
         for d in ('/dir3', '/dir1/a', '/dir1/b'):
-            v,sb = obj.getattr(topdir + d)
-            self.assertEqual(v, -obj.ENOENT, msg='pre-sync %s not removed' % (topdir+d))
+            v, sb = obj.getattr(topdir + d)
+            self.assertEqual(
+                v, -obj.ENOENT, msg='pre-sync %s not removed' % (topdir+d))
         obj.teardown()
 
     def test_09_rename(self):
-        print( 'Test 9, rename')
+        print('Test 9, rename')
 
         obj.init(prefix)
 
@@ -426,23 +440,24 @@ class tests(unittest.TestCase):
         v = obj.mkdir(topdir, 0o777)
         self.assertOK(v, 'mkdir %s' % topdir)
 
-        d1,d2,f1,f2 = [topdir + n for n in ('/dir1', '/dir2', '/file1', '/file2')]
+        d1, d2, f1, f2 = [
+            topdir + n for n in ('/dir1', '/dir2', '/file1', '/file2')]
         obj.mkdir(d1, 0o777)
         obj.create(f1, 0o777)
 
         v = obj.rename(d1, d2)
-        self.assertOK(v, 'rename(%s, %s) [dirs]' % (d1,d2))
-        v,sb = obj.getattr(d1)
+        self.assertOK(v, 'rename(%s, %s) [dirs]' % (d1, d2))
+        v, sb = obj.getattr(d1)
         self.assertEqual(v, -obj.ENOENT, msg='rename: %s->%s' % (d1, d2))
-        v,sb = obj.getattr(d2)
-        self.assertOK(v, 'rename(%s, %s)' % (d1,d2))
-        
+        v, sb = obj.getattr(d2)
+        self.assertOK(v, 'rename(%s, %s)' % (d1, d2))
+
         v = obj.rename(f1, f2)
-        self.assertOK(v, 'rename(%s, %s) [files]' % (f1,f2))
-        v,sb = obj.getattr(f1)
+        self.assertOK(v, 'rename(%s, %s) [files]' % (f1, f2))
+        v, sb = obj.getattr(f1)
         self.assertEqual(v, -obj.ENOENT, msg='rename: %s->%s' % (f1, f2))
-        v,sb = obj.getattr(f2)
-        self.assertOK(v, 'rename(%s, %s)' % (f1,f2))
+        v, sb = obj.getattr(f2)
+        self.assertOK(v, 'rename(%s, %s)' % (f1, f2))
 
         v = obj.rename(d2, f2)
         self.assertEqual(-v, obj.EEXIST)
@@ -450,8 +465,8 @@ class tests(unittest.TestCase):
         v = obj.rename(f2, d2)
         self.assertEqual(-v, obj.EEXIST)
 
-        #v = obj.rename(f2, d2 + '/zz')
-        #self.assertTrue(v == 0 or -v == obj.EINVAL, msg='%s->%s = %d' % (f2,d2,v))
+        # v = obj.rename(f2, d2 + '/zz')
+        # self.assertTrue(v == 0 or -v == obj.EINVAL, msg='%s->%s = %d' % (f2,d2,v))
 
         v = obj.rename(d2 + 'bad', d1)
         self.assertTrue(-v == obj.ENOENT)
@@ -460,19 +475,21 @@ class tests(unittest.TestCase):
         obj.teardown()
         obj.init(prefix)
 
-        v,sb = obj.getattr(d1)
-        self.assertEqual(v, -obj.ENOENT, msg='post-sync rename: %s->%s' % (d1, d2))
-        v,sb = obj.getattr(d2)
-        self.assertOK(v, 'post-sync rename(%s, %s)' % (d1,d2))
-        
-        v,sb = obj.getattr(f1)
-        self.assertEqual(v, -obj.ENOENT, msg='post-sync rename: %s->%s' % (f1, f2))
-        v,sb = obj.getattr(f2)
-        self.assertOK(v, 'post-sync rename(%s, %s)' % (f1,f2))
+        v, sb = obj.getattr(d1)
+        self.assertEqual(
+            v, -obj.ENOENT, msg='post-sync rename: %s->%s' % (d1, d2))
+        v, sb = obj.getattr(d2)
+        self.assertOK(v, 'post-sync rename(%s, %s)' % (d1, d2))
+
+        v, sb = obj.getattr(f1)
+        self.assertEqual(
+            v, -obj.ENOENT, msg='post-sync rename: %s->%s' % (f1, f2))
+        v, sb = obj.getattr(f2)
+        self.assertOK(v, 'post-sync rename(%s, %s)' % (f1, f2))
         obj.teardown()
 
     def test_10_chmod(self):
-        print( 'Test 10, chmod')
+        print('Test 10, chmod')
 
         obj.init(prefix)
         topdir = '/test10'
@@ -486,29 +503,29 @@ class tests(unittest.TestCase):
 
         for m in (0o700, 0o666, 0o555, 0o133):
             v = obj.chmod(f, m)
-            v,sb = obj.getattr(f)
+            v, sb = obj.getattr(f)
             self.assertEqual(sb.st_mode & ~obj.S_IFMT, m)
             v = obj.chmod(d, m)
-            v,sb = obj.getattr(d)
+            v, sb = obj.getattr(d)
             self.assertEqual(sb.st_mode & ~obj.S_IFMT, m)
 
         v = obj.chmod(topdir + '/does-not-exist', 0o777)
         self.assertEqual(-v, obj.ENOENT)
-        
+
         obj.sync()
         obj.teardown()
         obj.init(prefix)
 
         m = 0o133
-        v,sb = obj.getattr(f)
+        v, sb = obj.getattr(f)
         self.assertEqual(sb.st_mode & ~obj.S_IFMT, m)
         v = obj.chmod(d, m)
-        v,sb = obj.getattr(d)
+        v, sb = obj.getattr(d)
         self.assertEqual(sb.st_mode & ~obj.S_IFMT, m)
         obj.teardown()
- 
+
     def test_11_truncate(self):
-        print( 'Test 11, truncate')
+        print('Test 11, truncate')
 
         obj.init(prefix)
         topdir = '/test11'
@@ -530,30 +547,30 @@ class tests(unittest.TestCase):
             self.assertOK(v, 'write(%s, %d bytes)' % (path, len(data)))
 
         for path in files:
-            print( path)
+            print(path)
             v = obj.truncate(path, 0)
             self.assertOK(v, 'truncate(%s,0)' % path)
-            v,sb = obj.getattr(path)
+            v, sb = obj.getattr(path)
             self.assertOK(v, 'getattr(%s)' % path)
             self.assertEqual(sb.st_size, 0)
 
         v = obj.truncate(topdir + '/invalid-path', 0)
         self.assertEqual(-v, obj.ENOENT, msg='/invalid-path')
-        
+
         obj.sync()
         obj.teardown()
         obj.init(prefix)
 
         for path in files:
-            print( path)
-            v,sb = obj.getattr(path)
+            print(path)
+            v, sb = obj.getattr(path)
             self.assertOK(v, 'getattr(%s)' % path)
             self.assertEqual(sb.st_size, 0)
         obj.teardown()
 
-        
+
 if __name__ == '__main__':
-    os.system("python3 minio_cli.py")
+    # os.system("python3 minio_cli.py")
     dir = "/local0/mount1"
     '''try:
         for de in os.scandir(dir):
@@ -566,9 +583,9 @@ if __name__ == '__main__':
     except OSError(e):
         pass'''
 
-    obj.set_context("songs", "minio", "miniostorage", "10.255.23.109:9000", 262144, 2000)
-    #obj.teardown()
-    #obj.init(prefix)
+    obj.set_context("obfs-test", "minioadmin", "minioadmin",
+                    "localhost:9000", 262144, 2000)
+    # obj.teardown()
+    # obj.init(prefix)
 #    obj.lib.test_function(ctypes.c_int(1))
     unittest.main()
-    
