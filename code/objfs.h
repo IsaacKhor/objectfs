@@ -10,7 +10,7 @@ struct objfs {
     int use_local; /* prefix is a file path */
     int chunk_size;
     int cache_size;
-    s3_target *s3;
+    S3Wrap *s3;
 };
 
 #ifdef __cplusplus

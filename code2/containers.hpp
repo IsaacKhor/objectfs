@@ -119,6 +119,12 @@ template <typename K, typename V> class ConcurrentMap
         map.insert_or_assign(key, std::move(value));
     }
 
+    void insert_copy(const K &key, const V value)
+    {
+        std::unique_lock lock(mutex);
+        map[key] = value;
+    }
+
     void erase(const K &key)
     {
         std::unique_lock lock(mutex);

@@ -19,7 +19,7 @@ using objectid_t = uint32_t;
  * used to read an object.
  */
 struct ObjectSegment {
-    uint64_t object_id;
+    objectid_t object_id;
     size_t offset;
     size_t len;
 };
@@ -100,10 +100,8 @@ using FSObjectData = std::variant<FSFile, FSDirectory, FSSymlink>;
 
 class FSObject
 {
-  private:
-    explicit FSObject(inum_t inode_num, mode_t permissions);
-
   public:
+    explicit FSObject(inum_t inode_num, mode_t permissions);
     static std::unique_ptr<FSObject> create_file(inum_t inode_num,
                                                  mode_t permissions);
     static std::unique_ptr<FSObject>
@@ -140,9 +138,12 @@ class FSObject
         group_id = gid;
     }
 
-    inline bool is_file() { std::holds_alternative<FSFile>(data); }
-    inline bool is_directory() { std::holds_alternative<FSDirectory>(data); }
-    inline bool is_symlink() { std::holds_alternative<FSSymlink>(data); }
+    inline bool is_file() { return std::holds_alternative<FSFile>(data); }
+    inline bool is_directory()
+    {
+        return std::holds_alternative<FSDirectory>(data);
+    }
+    inline bool is_symlink() { return std::holds_alternative<FSSymlink>(data); }
 
     inline FSFile &get_file() { return std::get<FSFile>(data); }
     inline FSDirectory &get_directory() { return std::get<FSDirectory>(data); }
@@ -156,8 +157,13 @@ class FSObject
 using std::byte;
 
 struct BackendObjectHeader {
-    int32_t magic;
+    uint64_t magic;
+    objectid_t object_id;
+    objectid_t last_checkpoint_id;
+    // includes header
+    size_t len;
 };
+
 
 enum class LogObjectType : uint8_t {
     SetFileData = 1,
@@ -205,7 +211,8 @@ struct LogMakeDirectory {
     inum_t parent_inum;
     inum_t self_inum;
     mode_t permissions;
-    std::string name;
+    size_t name_len;
+    char name[];
 };
 
 struct LogRemoveDirectory {
@@ -219,7 +226,8 @@ struct LogCreateFile {
     inum_t parent_inum;
     inum_t self_inum;
     mode_t mode;
-    std::string name;
+    size_t name_len;
+    char name[];
 };
 
 struct LogRemoveFile {

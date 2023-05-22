@@ -157,6 +157,22 @@ void FSFile::insert_segment(int64_t offset, ObjectSegment e)
     extents_map[offset] = e;
 }
 
+ssize_t FSFile::truncate_to(size_t new_size)
+{
+    for (auto &[offset, segment] : extents_map) {
+        if (offset >= new_size) {
+            extents_map.erase(offset);
+            continue;
+        }
+
+        if (offset + segment.len > new_size) {
+            segment.len = new_size - offset;
+            extents_map[offset] = segment;
+        }
+    }
+    return 0;
+}
+
 size_t FSFile::size()
 {
     if (extents_map.empty())
@@ -182,7 +198,7 @@ void FSDirectory::remove_child(inum_t child_inum)
         }
 }
 
-inline std::vector<std::pair<std::string, inum_t>> FSDirectory::list_children()
+std::vector<std::pair<std::string, inum_t>> FSDirectory::list_children()
 {
     std::vector<std::pair<std::string, inum_t>> ret;
     for (auto &child : children)
@@ -190,10 +206,10 @@ inline std::vector<std::pair<std::string, inum_t>> FSDirectory::list_children()
     return ret;
 }
 
-inline std::optional<inum_t> FSDirectory::get_child(std::string name)
+std::optional<inum_t> FSDirectory::get_child(std::string name)
 {
     if (children.contains(name))
-        return children.at(name);
+        return std::make_optional(children.at(name));
     else
         return std::nullopt;
 }

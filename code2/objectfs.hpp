@@ -59,7 +59,7 @@ class ObjectFS
     int truncate_file(std::string path, size_t new_size);
     int sync_file(inum_t inum, bool data_only);
 
-    std::optional<FSObjInfo> get_attributes(std::string path);
+    std::expected<FSObjInfo, int> get_attributes(std::string path);
     int change_permissions(std::string path, mode_t mode);
     int change_ownership(std::string path, uid_t uid, gid_t gid);
 

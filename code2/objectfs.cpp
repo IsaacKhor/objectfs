@@ -68,16 +68,17 @@ inum_t ObjectFS::create_file(std::string path, mode_t mode)
 
     inum_t new_inum = allocate_inode_num();
     auto obj = FSObject::create_file(new_inum, mode);
-    LogCreateFile logobj = {.type = LogObjectType::CreateFile,
-                            .parent_inum = parent_inode_num.value(),
-                            .self_inum = new_inum,
-                            .mode = mode,
-                            .name = filename};
+    LogCreateFile logobj = {
+        .type = LogObjectType::CreateFile,
+        .parent_inum = parent_inode_num.value(),
+        .self_inum = new_inum,
+        .mode = mode,
+    };
 
     auto &parent_dir = parent_obj->get_directory();
     {
         std::unique_lock<std::shared_mutex> lock(parent_obj->mtx);
-        obj_backend.append_logobj(logobj);
+        obj_backend.append_logobj(logobj, filename);
         parent_dir.add_child(filename, new_inum);
         inodes.insert(new_inum, std::move(obj));
     }
@@ -87,7 +88,6 @@ inum_t ObjectFS::create_file(std::string path, mode_t mode)
 
 int ObjectFS::delete_file(std::string path)
 {
-
     auto inode_num = path_to_inode_num(path);
     if (!inode_num.has_value())
         return -ENOENT;
@@ -108,7 +108,6 @@ int ObjectFS::delete_file(std::string path)
         .removed_inum = inode_num.value(),
     };
 
-    auto filename = path.substr(path.find_last_of('/') + 1);
     {
         std::scoped_lock lock(fsobj->mtx, parent_obj->mtx);
 
@@ -120,7 +119,7 @@ int ObjectFS::delete_file(std::string path)
     return 0;
 }
 
-int ObjectFS::read_file(inum_t inum, size_t offset, size_t len, byte *buf)
+int ObjectFS::read_file(inum_t inum, size_t buf_offset, size_t len, byte *buf)
 {
     auto fsobj_opt = inodes.get_copy(inum);
     // fsobj = resolve_symlink_recur(fsobj);
@@ -136,18 +135,18 @@ int ObjectFS::read_file(inum_t inum, size_t offset, size_t len, byte *buf)
     // Get all extents that overlap with the file in question. This is the only
     // time we need to lock the file because once we get the extents, we can
     // just read from the backend without locking.
-    // TODO when adding GC, could do it like this: the GC copies the live data
+    // NOTE when adding GC, could do it like this: the GC copies the live data
     // somewhere else, then grab a write lock to modify extents. Only after the
     // extents are written do we delete the old data. This way, we don't need to
     // worry about the objects disappearing underneath us
     std::vector<std::pair<int64_t, ObjectSegment>> extents;
     {
         std::shared_lock<std::shared_mutex> lock(fsobj->mtx);
-        extents = file.segments_in_range(offset, len);
+        extents = file.segments_in_range(buf_offset, len);
     }
 
     for (auto &[file_offest, segment] : extents) {
-        obj_backend.get_obj_segment(segment, buf + file_offest);
+        obj_backend.get_obj_segment(segment, buf + file_offest - buf_offset);
     }
 
     return len;
@@ -176,7 +175,13 @@ int ObjectFS::write_file(inum_t inum, size_t offset, size_t len, byte *buf)
     {
         std::unique_lock lock(fsobj->mtx);
 
-        auto log_obj_seg = obj_backend.append_data(inum, offset, len, buf);
+        LogSetFileData logobj = {
+            .type = LogObjectType::SetFileData,
+            .inode_num = inum,
+            .file_offset = offset,
+            .data_len = len,
+        };
+        auto log_obj_seg = obj_backend.append_logobj(logobj, len, buf);
 
         ObjectSegment data_seg = {
             .object_id = log_obj_seg.object_id,
@@ -204,6 +209,11 @@ int ObjectFS::truncate_file(std::string path, size_t new_size)
     if (!fsobj->is_file())
         return -EISDIR;
 
+    LogTruncateFile logobj = {
+        .type = LogObjectType::TruncateFile,
+        .inode_num = inode_num.value(),
+        .new_size = new_size,
+    };
     auto &file = fsobj->get_file();
     {
         std::unique_lock<std::shared_mutex> lock(fsobj->mtx);
@@ -212,11 +222,6 @@ int ObjectFS::truncate_file(std::string path, size_t new_size)
         if (new_size > file.size())
             return -EINVAL;
 
-        LogTruncateFile logobj = {
-            .type = LogObjectType::TruncateFile,
-            .inode_num = inode_num.value(),
-            .new_size = new_size,
-        };
         obj_backend.append_logobj(logobj);
         file.truncate_to(new_size);
     }
@@ -242,6 +247,37 @@ int ObjectFS::sync_file(inum_t inum, bool data_only)
     return 0;
 }
 
+std::expected<FSObjInfo, int> ObjectFS::get_attributes(std::string path)
+{
+    auto inode_num = path_to_inode_num(path);
+    if (!inode_num.has_value())
+        return std::unexpected(ENOENT);
+
+    auto fsobj_opt = inodes.get_copy(inode_num.value());
+    // fsobj = resolve_symlink_recur(fsobj);
+    if (!fsobj_opt.has_value())
+        return std::unexpected(ENOENT);
+
+    auto fsobj = fsobj_opt.value();
+
+    std::shared_lock<std::shared_mutex> lock(fsobj->mtx);
+    FSObjInfo info = {
+        .name = "",
+        .inode_num = inode_num.value(),
+        .mode = fsobj->permissions,
+        .uid = fsobj->owner_id,
+        .gid = fsobj->group_id,
+        .size = 0,
+    };
+
+    if (fsobj->is_file())
+        info.size = fsobj->get_file().size();
+    else if(fsobj->is_directory())
+        info.size = fsobj->get_directory().num_children() + 2;
+
+    return info;
+}
+
 int ObjectFS::change_permissions(std::string path, mode_t new_perms)
 {
     auto inode_num = path_to_inode_num(path);
@@ -253,15 +289,14 @@ int ObjectFS::change_permissions(std::string path, mode_t new_perms)
     if (!fsobj_opt.has_value())
         return -ENOENT;
 
+    LogChangeFilePerms logobj = {
+        .type = LogObjectType::ChangeFilePermissions,
+        .inode_num = inode_num.value(),
+        .new_perms = new_perms,
+    };
     auto fsobj = fsobj_opt.value();
     {
         std::unique_lock<std::shared_mutex> lock(fsobj->mtx);
-
-        LogChangeFilePerms logobj = {
-            .type = LogObjectType::ChangeFilePermissions,
-            .inode_num = inode_num.value(),
-            .new_perms = new_perms,
-        };
         obj_backend.append_logobj(logobj);
         fsobj->update_permissions(new_perms);
     }
@@ -280,16 +315,15 @@ int ObjectFS::change_ownership(std::string path, uid_t uid, gid_t gid)
     if (!fsobj_opt.has_value())
         return -ENOENT;
 
+    LogChangeFileOwners logobj = {
+        .type = LogObjectType::ChangeFilePermissions,
+        .inode_num = inode_num.value(),
+        .new_uid = uid,
+        .new_gid = gid,
+    };
     auto fsobj = fsobj_opt.value();
     {
         std::unique_lock<std::shared_mutex> lock(fsobj->mtx);
-
-        LogChangeFileOwners logobj = {
-            .type = LogObjectType::ChangeFilePermissions,
-            .inode_num = inode_num.value(),
-            .new_uid = uid,
-            .new_gid = gid,
-        };
         obj_backend.append_logobj(logobj);
         fsobj->update_owners(uid, gid);
     }
@@ -298,7 +332,7 @@ int ObjectFS::change_ownership(std::string path, uid_t uid, gid_t gid)
 }
 
 std::expected<inum_t, int>
-ObjectFS::make_directory(std::string parent, std::string name, mode_t mode)
+ObjectFS::make_directory(std::string parent, std::string dirname, mode_t mode)
 {
     auto parent_inum = path_to_inode_num(parent);
     if (!parent_inum.has_value())
@@ -316,7 +350,7 @@ ObjectFS::make_directory(std::string parent, std::string name, mode_t mode)
     {
         std::unique_lock<std::shared_mutex> lock(parent_fsobj->mtx);
 
-        if (!parent_dir.get_child(name).has_value())
+        if (!parent_dir.get_child(dirname).has_value())
             return -EEXIST;
 
         auto newdir_inum = allocate_inode_num();
@@ -329,9 +363,9 @@ ObjectFS::make_directory(std::string parent, std::string name, mode_t mode)
             .self_inum = newdir_inum,
             .permissions = mode,
         };
-        obj_backend.append_logobj(logobj);
+        obj_backend.append_logobj(logobj, dirname);
 
-        parent_dir.add_child(name, newdir_inum);
+        parent_dir.add_child(dirname, newdir_inum);
         inodes.insert(newdir_inum, std::move(newdir_obj));
         return newdir_inum;
     }
@@ -433,6 +467,9 @@ std::optional<inum_t> ObjectFS::path_to_inode_num(std::string path)
     auto pathvec = split_string_on_char(path, '/');
     if (pathvec.size() == 0)
         return std::nullopt;
+
+    if (pathvec.size() == 1)
+        return std::optional(ROOT_DIR_INUM);
 
     auto cur_inode_num = ROOT_DIR_INUM;
     for (auto it = pathvec.begin(); it != pathvec.end(); it++) {

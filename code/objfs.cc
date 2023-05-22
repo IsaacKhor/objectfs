@@ -1870,7 +1870,7 @@ void *fs_init(struct fuse_conn_info *conn)
     // logger = new Logger("/mnt/ramdisk/log_" + std::to_string(f_bsize) + "_" +
     //                   std::to_string(CACHE_SIZE) + ".txt");
 
-    fs->s3 = new s3_target(fs->host, fs->bucket, fs->access, fs->secret, false);
+    fs->s3 = new S3Wrap(fs->host, fs->bucket, fs->access, fs->secret, false);
 
     std::list<std::string> keys;
     if (S3StatusOK != fs->s3->s3_list(fs->prefix, keys))

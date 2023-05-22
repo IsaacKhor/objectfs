@@ -17,33 +17,77 @@
 #include <unistd.h>
 #include <vector>
 
-#include "iov.h"
-#include "s3wrap.h"
+#include "s3wrap.hpp"
 
-void *s3_init(char *bucket, char *host, char *access, char *secret)
+/**
+ * copied from the old iov.c
+ */
+
+#define min(a, b) ((a) < (b)) ? (a) : (b)
+
+/* set contents of @iov to @val
+ */
+void iov_memset(struct iovec *iov, int iov_cnt, char val)
 {
-    s3_target *t = new s3_target(strdup(host), strdup(bucket), strdup(access),
-                                 strdup(secret), false);
-    return (void *)t;
+    for (int i = 0; i < iov_cnt; i++)
+        memset(iov[i].iov_base, val, iov[i].iov_len);
 }
 
-S3Status s3_read(void *_t, char *key, ssize_t offset, ssize_t len,
-                 struct iovec *iov, int iov_cnt)
+/* copy @size bytes from @iov starting at @offset
+ */
+void memcpy_iov(struct iovec *iov, int iov_cnt, ssize_t offset, void *buf,
+                ssize_t size, bool to_iov)
 {
-    s3_target *t = (s3_target *)_t;
-    return t->s3_get(std::string(key), offset, len, iov, iov_cnt);
+    void *base = NULL;
+    int base_len = 0, i = 0;
+
+    for (; offset > 0 && i < iov_cnt; i++) {
+        if (offset < iov[i].iov_len) {
+            base = (void *)(offset + (char *)iov[i].iov_base);
+            base_len = min(size, iov[i].iov_len - offset);
+            offset = 0;
+        } else
+            offset -= iov[i].iov_len;
+    }
+    if (base != NULL) {
+        to_iov ? memcpy(base, buf, base_len) : memcpy(buf, base, base_len);
+        buf = (void *)(base_len + (char *)buf);
+        size -= base_len;
+    }
+    for (; i < iov_cnt && size > 0; i++) {
+        size_t bytes = min(iov[i].iov_len, size);
+        to_iov ? memcpy(iov[i].iov_base, buf, bytes)
+               : memcpy(buf, iov[i].iov_base, bytes);
+        buf = (void *)(bytes + (char *)buf);
+        size -= bytes;
+    }
+    assert(size == 0);
 }
 
-S3Status s3_write(void *_t, char *key, struct iovec *iov, int iov_cnt)
+/* copy @offset/@size in @iov to @buf
+ */
+void memcpy_from_iov(struct iovec *iov, int iov_cnt, ssize_t offset, void *buf,
+                     ssize_t size)
 {
-    s3_target *t = (s3_target *)_t;
-    return t->s3_put(std::string(key), iov, iov_cnt);
+    memcpy_iov(iov, iov_cnt, offset, buf, size, false);
 }
 
-S3Status s3_len(void *_t, char *key, ssize_t *p_len)
+/* copy @buf to @offset/@size in @iov
+ */
+void memcpy_to_iov(struct iovec *iov, int iov_cnt, ssize_t offset,
+                   const void *buf, ssize_t size)
 {
-    s3_target *t = (s3_target *)_t;
-    return t->s3_head(std::string(key), p_len);
+    memcpy_iov(iov, iov_cnt, offset, (void *)buf, size, true);
+}
+
+/* total length of @iov
+ */
+ssize_t iov_sum(struct iovec *iov, int iov_cnt)
+{
+    size_t s = 0;
+    for (int i = 0; i < iov_cnt; i++)
+        s += iov[i].iov_len;
+    return s;
 }
 
 class s3_context
@@ -131,8 +175,8 @@ S3Status recv_data_callback(int size, const char *buf, void *data)
 
 // offset, len are in BYTES
 //
-S3Status s3_target::s3_get(std::string key, ssize_t offset, ssize_t len,
-                           struct iovec *iov, int iov_cnt)
+S3Status S3Wrap::s3_get(std::string key, ssize_t offset, ssize_t len,
+                        struct iovec *iov, int iov_cnt)
 {
     S3GetObjectHandler h;
     h.responseHandler.propertiesCallback = response_properties;
@@ -163,7 +207,7 @@ S3Status s3_target::s3_get(std::string key, ssize_t offset, ssize_t len,
     return ctx.status;
 }
 
-S3Status s3_target::s3_delete(std::string key)
+S3Status S3Wrap::s3_delete(std::string key)
 {
     S3ResponseHandler h;
     h.propertiesCallback = response_properties;
@@ -200,7 +244,7 @@ int put_data_callback(int size, char *buf, void *data)
     return size;
 }
 
-S3Status s3_target::s3_put(std::string key, struct iovec *iov, int iov_cnt)
+S3Status S3Wrap::s3_put(std::string key, struct iovec *iov, int iov_cnt)
 {
     S3PutObjectHandler h;
     h.responseHandler.propertiesCallback = response_properties;
@@ -242,7 +286,7 @@ S3Status s3_target::s3_put(std::string key, struct iovec *iov, int iov_cnt)
     return ctx.status;
 }
 
-S3Status s3_target::s3_head(std::string key, ssize_t *p_len)
+S3Status S3Wrap::s3_head(std::string key, ssize_t *p_len)
 {
     S3ResponseHandler h;
     h.propertiesCallback = response_properties;
@@ -294,7 +338,7 @@ S3Status list_callback(int isTruncated, const char *nextMarker,
     return S3StatusOK;
 }
 
-S3Status s3_target::s3_list(std::string prefix, std::list<std::string> &keys)
+S3Status S3Wrap::s3_list(std::string prefix, std::list<std::string> &keys)
 {
     S3ListBucketHandler h;
     h.responseHandler.propertiesCallback = response_properties;

@@ -1,5 +1,6 @@
 #pragma once
 #include <iostream>
+#include <span>
 #include <sstream>
 #include <stdio.h>
 #include <string>
@@ -45,20 +46,4 @@ inline std::string string_join(const std::vector<std::string> &strings,
             result += delim;
     }
     return result;
-}
-
-/**
- * Python style array slicing. Copied from
- * https://stackoverflow.com/questions/50549611/
- */
-template <int left = 0, int right = 0, typename T>
-inline constexpr auto slice(T &&container)
-{
-    if constexpr (right > 0) {
-        return std::span(begin(std::forward<T>(container)) + left,
-                         begin(std::forward<T>(container)) + right);
-    } else {
-        return std::span(begin(std::forward<T>(container)) + left,
-                         end(std::forward<T>(container)) + right);
-    }
 }

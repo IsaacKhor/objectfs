@@ -1,4 +1,5 @@
 #define FUSE_USE_VERSION 27
+#define _FILE_OFFSET_BITS 64
 #include <fuse.h>
 
 #include "models.hpp"
@@ -38,6 +39,12 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     auto inum = ofs->create_file(path, mode);
     fi->fh = inum;
     return 0;
+}
+
+int fs_unlink(const char *path)
+{
+    auto ofs = static_cast<ObjectFS *>(fuse_get_context()->private_data);
+    return ofs->delete_file(path);
 }
 
 int fs_read(const char *path, char *buf, size_t size, off_t offset,
@@ -84,15 +91,25 @@ int fs_getattr(const char *path, struct stat *stbuf)
     auto res_opt = ofs->get_attributes(path);
 
     if (!res_opt.has_value())
-        return -ENOENT;
+        return -res_opt.error();
 
     memset(stbuf, 0, sizeof(struct stat));
     auto res = res_opt.value();
     stbuf->st_ino = res.inode_num;
     stbuf->st_mode = res.mode;
+    stbuf->st_nlink = 1;
     stbuf->st_uid = res.uid;
     stbuf->st_gid = res.gid;
     stbuf->st_size = res.size;
+    stbuf->st_blocks = 1;
+    stbuf->st_atime = 0;
+    stbuf->st_mtime = 0;
+    stbuf->st_ctime = 0;
+
+    debug("getattr: %s, inode %lu, mode %o, uid %u, gid %u, size %lu", path,
+          stbuf->st_ino, stbuf->st_mode, stbuf->st_uid, stbuf->st_gid,
+          stbuf->st_size);
+
     return 0;
 }
 
@@ -103,7 +120,7 @@ int fs_mkdir(const char *path, mode_t mode)
     if (vec.size() == 1)
         return -EEXIST;
 
-    auto parent = slice<0, -1>(vec);
+    std::vector<std::string> parent(vec.begin(), vec.end() - 1);
     auto newdir = vec.back();
     auto res = ofs->make_directory(string_join(parent, "/"), newdir, mode);
 
@@ -117,6 +134,22 @@ int fs_rmdir(const char *path)
 {
     auto ofs = static_cast<ObjectFS *>(fuse_get_context()->private_data);
     return ofs->remove_directory(path);
+}
+
+int fs_statfs(const char *path, struct statvfs *st)
+{
+    st->f_bsize = 4096;
+    st->f_blocks = 0;
+    st->f_bfree = 0;
+    st->f_bavail = 0;
+    st->f_namemax = 255;
+    return 0;
+}
+
+int fs_opendir(const char *path, struct fuse_file_info *fi)
+{
+    //noop
+    return 0;
 }
 
 int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
@@ -145,26 +178,67 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 }
 
 struct fuse_operations fs_ops = {
-    // Filesystem create/destroy
-    .init = fs_init,
-    .destroy = fs_destroy,
-
-    // File r/w
-    .create = fs_create,
+    .getattr = fs_getattr,
+    .readlink = NULL,
+    .mknod = NULL,
+    .mkdir = fs_mkdir,
+    .unlink = fs_unlink,
+    .rmdir = fs_rmdir,
+    .symlink = NULL,
+    .rename = NULL,
+    .link = NULL,
+    .chmod = fs_chmod,
+    .chown = fs_chown,
+    .truncate = fs_truncate,
     .open = fs_open,
     .read = fs_read,
     .write = fs_write,
-    .truncate = fs_truncate,
+    .statfs = fs_statfs,
+    .flush = NULL,
+    .release = NULL, // TODO
     .fsync = fs_fsync,
-
-    // Metadata
-    .chmod = fs_chmod,
-    .chown = fs_chown,
-    .getattr = fs_getattr,
-
-    // Directory operations
-    .mkdir = fs_mkdir,
-    .rmdir = fs_rmdir,
-
+    .setxattr = NULL,
+    .getxattr = NULL,
+    .listxattr = NULL,
+    .removexattr = NULL,
+    .opendir = fs_opendir,
     .readdir = fs_readdir,
+    .releasedir = NULL,
+    .fsyncdir = NULL,
+    .init = fs_init,
+    .destroy = fs_destroy,
+    .access = NULL,
+    .create = fs_create,
+    .lock = NULL,
+    .utimens = NULL,
+    .bmap = NULL,
+    .ioctl = NULL,
+    .poll = NULL,
+    .write_buf = NULL,
+    .flock = NULL,
+    .fallocate = NULL,
+    // .copy_file_range = NULL,
+    // .lseek = NULL,
 };
+
+int main(int argc, char **argv)
+{
+    fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    fuse_opt_parse(&args, nullptr, nullptr, nullptr);
+    fuse_opt_add_arg(&args, "-oallow_other");
+    fuse_opt_add_arg(&args, "-odefault_permissions");
+    fuse_opt_add_arg(&args, "-oauto_unmount");
+    // fuse_opt_add_arg(&args, "-okernel_cache");
+    // fuse_opt_add_arg(&args, "-ouse_ino");
+
+    auto s3_host = std::getenv("S3_HOSTNAME");
+    auto s3_access = std::getenv("S3_ACCESS_KEY_ID");
+    auto s3_secret = std::getenv("S3_SECRET_ACCESS_KEY");
+    auto s3_bucket_name = std::getenv("S3_TEST_BUCKET_NAME");
+
+    debug("Mounting %s/%s (%s:%s)", s3_host, s3_bucket_name, s3_access,
+          s3_secret);
+
+    S3ObjectStore store(s3_host, s3_bucket_name, s3_access, s3_secret, false);
+    return fuse_main(args.argc, args.argv, &fs_ops, &store);
+}
