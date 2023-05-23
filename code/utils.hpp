@@ -6,7 +6,9 @@
 #include <string>
 #include <vector>
 
+#ifndef ENABLE_DEBUG
 #define ENABLE_DEBUG 1
+#endif
 
 #define debug(MSG, ...)                                                        \
     do {                                                                       \

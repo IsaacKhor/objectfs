@@ -25,13 +25,13 @@ FSObject::create_directory(inum_t parent_inum, inum_t self_inum, mode_t perms)
 }
 
 std::vector<std::pair<int64_t, ObjectSegment>>
-FSFile::segments_in_range(int64_t range_offset, size_t range_len)
+FSFile::segments_in_range(int64_t file_offset, size_t range_len)
 {
     std::vector<std::pair<int64_t, ObjectSegment>> res;
     if (extents_map.empty())
         return res;
 
-    auto it = extents_map.lower_bound(range_offset);
+    auto it = extents_map.lower_bound(file_offset);
 
     // File does not contain any such segment
     if (it == extents_map.end())
@@ -39,12 +39,12 @@ FSFile::segments_in_range(int64_t range_offset, size_t range_len)
 
     // lower bound gives us >= offset, so we want to go back to the 1st element
     // that is <= offset and then iterate forward
-    if (it->first > range_offset && it != extents_map.begin())
+    if (it->first > file_offset && it != extents_map.begin())
         it--;
 
     while (it != extents_map.end()) {
         auto [extent_offset, extent_segment] = *it;
-        if (extent_offset >= range_offset + range_len)
+        if (extent_offset >= file_offset + range_len)
             break;
 
         res.push_back(*it);
@@ -54,13 +54,19 @@ FSFile::segments_in_range(int64_t range_offset, size_t range_len)
     // Adjust first and last segment to match the range we're looking for
     // in the case that the range starts or ends in the middle of an extent
     auto &[front_offset, front_seg] = res.front();
-    auto front_adjust = range_offset - front_offset;
+    auto front_adjust = file_offset - front_offset;
     front_seg.offset += front_adjust;
     front_seg.len -= front_adjust;
 
-    auto &end_seg = res.back().second;
-    if (end_seg.offset + end_seg.len > range_offset + range_len)
-        end_seg.len = range_offset + range_len - end_seg.offset;
+    // Example: 
+    // We're trying to read: file_offset: 50, range_len: 100 (50 to 150)
+    // State: end_file_offset: 109, end_seg: {id: 100, offset: 0, len: 1000}
+    // Desired final seg: {id: 100, offset: 0, len: 41}
+    // 41 is the remaining length of the range we're trying to read
+
+    auto &[end_file_offset, end_seg] = res.back();
+    if (end_file_offset + end_seg.len > file_offset + range_len)
+        end_seg.len = file_offset + range_len - end_file_offset;
 
     return res;
 }

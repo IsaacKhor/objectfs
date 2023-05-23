@@ -125,6 +125,10 @@ void ObjectBackend::maybe_rollover()
 
 void ObjectBackend::rollover_log()
 {
+    // Don't flush if there's nothing in the log
+    if (log_len.load() <= sizeof(BackendObjectHeader))
+        return;
+
     auto new_log = new std::byte[log_capacity];
 
     size_t old_len;
@@ -132,6 +136,11 @@ void ObjectBackend::rollover_log()
     byte *old_log;
     {
         std::unique_lock<std::shared_mutex> lock(log_mutex);
+        if (log_len.load() <= sizeof(BackendObjectHeader)) {
+            delete[] new_log;
+            return;
+        }
+
         old_len = log_len.exchange(0);
         old_id = active_object_id;
         old_log = log;
@@ -155,7 +164,7 @@ void ObjectBackend::rollover_log()
     // push to backend
     auto object_name = get_obj_name(old_id);
     debug("pushing '%s' to backend, len %i", object_name.c_str(), hdr->len);
-    s3.put(object_name, log, log_len);
+    s3.put(object_name, old_log, log_len);
 
     // We only erase from the queue *after* the push is complete
     // TODO consider directly putting all the blocks into the cache

@@ -1,11 +1,16 @@
 CC = gcc
 CXX = g++-12
 CXXFLAGS = -Wall -Wextra -Wconversion -Wdouble-promotion -Wno-sign-conversion
-CXXFLAGS += -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -fno-sanitize=null -fno-sanitize=alignment
-CXXFLAGS += -std=c++2b -g3 -fPIC -I../libs3/inc
+CXXFLAGS += -std=c++2b -fPIC -I../libs3/inc
 CXXLIBS = -lfuse -L../libs3/lib -ls3 -lfmt
 
-all: objectfs
+debug: CXXFLAGS += -g3 -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -fno-sanitize=null -fno-sanitize=alignment
+release: CXXFLAGS += -O3 -DENABLE_DEBUG=0
+
+debug: objectfs
+release: objectfs
+
+all: debug
 
 backend.o: backend.cpp backend.hpp
 	$(CXX) -c backend.cpp $(CXXFLAGS) -o backend.o
