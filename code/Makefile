@@ -1,24 +1,31 @@
-CC = clang
-CXX = clang++
-CXXFLAGS = -std=c++20 -g -Wall -fPIC -I../libs3/inc
-CFLAGS = -g -Wall -I../libs3/inc
+CC = gcc
+CXX = g++-12
+CXXFLAGS = -Wall -Wextra -Wconversion -Wdouble-promotion -Wno-sign-conversion
+CXXFLAGS += -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -fno-sanitize=null -fno-sanitize=alignment
+CXXFLAGS += -std=c++2b -g3 -fPIC -I../libs3/inc
+CXXLIBS = -lfuse -L../libs3/lib -ls3 -lfmt
 
-all: libobjfs.o libobjfs.so objfs-mount
+all: objectfs
 
-CFLAGS += -fPIC
+backend.o: backend.cpp backend.hpp
+	$(CXX) -c backend.cpp $(CXXFLAGS) -o backend.o
 
-iov.o: iov.c iov.h
-	$(CC) -O -c iov.c -fPIC
+objectfs.o: objectfs.cpp objectfs.hpp
+	$(CXX) -c objectfs.cpp $(CXXFLAGS) -o objectfs.o
 
-objects.o: objects.cc objects.h
-	$(CC) -g -c objects.cc $(CXXFLAGS) -o objects.o
+models.o: models.cpp models.hpp
+	$(CXX) -c models.cpp $(CXXFLAGS) -o models.o
 
-libobjfs.so: s3wrap.o iov.o objfs.o libobjfs.o objects.o
-	$(CC) -g $^ -o $@ -g -Wall -shared -fPIC -lstdc++ -L../libs3/build/lib -l:libs3.so.4 -lfuse -lfmt
+s3wrap.o: s3wrap.cpp s3wrap.hpp
+	$(CXX) -c s3wrap.cpp $(CXXFLAGS) -o s3wrap.o
 
-objfs-mount: objfs-mount.o objfs.o s3wrap.o iov.o objects.o
-	$(CXX) -g $^ -o $@ -lfuse -l:libs3.a -lcurl -lcrypto -lxml2 -L../libs3/build/lib -L/lib/x86_64-linux-gnu -pthread -lfmt
+fuse_interface.o: fuse_interface.cpp 
+	$(CXX) -c fuse_interface.cpp $(CXXFLAGS) -o fuse_interface.o
+
+objectfs: backend.o objectfs.o models.o s3wrap.o fuse_interface.o
+	$(CXX) backend.o objectfs.o models.o s3wrap.o fuse_interface.o -o objectfs $(CXXFLAGS) $(CXXLIBS)
+
+.PHONY: clean
 
 clean:
-	rm -f *.o *.so
-
+	rm -f *.o objectfs
