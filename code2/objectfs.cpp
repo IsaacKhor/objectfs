@@ -18,6 +18,9 @@ ObjectFS::ObjectFS(S3ObjectStore s3)
     // Create root directory
     auto root = FSObject::create_directory(ROOT_DIR_INUM, ROOT_DIR_INUM, 0755);
     inodes.insert(ROOT_DIR_INUM, std::move(root));
+
+    // Replay log
+    // auto logobjs = s3.list();
 }
 
 ObjectFS::~ObjectFS() {}
@@ -54,9 +57,11 @@ void ObjectFS::release_file(std::string path)
 
 inum_t ObjectFS::create_file(std::string path, mode_t mode)
 {
-
     auto filename = path.substr(path.find_last_of('/') + 1);
     auto parent_dirname = path.substr(0, path.find_last_of('/'));
+
+    debug("create_file: path=%s, filename=%s, parent_dirname=%s", path.c_str(),
+          filename.c_str(), parent_dirname.c_str());
 
     auto parent_inode_num = path_to_inode_num(parent_dirname);
     if (!parent_inode_num.has_value())
@@ -272,7 +277,7 @@ std::expected<FSObjInfo, int> ObjectFS::get_attributes(std::string path)
 
     if (fsobj->is_file())
         info.size = fsobj->get_file().size();
-    else if(fsobj->is_directory())
+    else if (fsobj->is_directory())
         info.size = fsobj->get_directory().num_children() + 2;
 
     return info;
@@ -464,15 +469,16 @@ std::vector<FSObjInfo> ObjectFS::list_directory(std::string path)
 
 std::optional<inum_t> ObjectFS::path_to_inode_num(std::string path)
 {
-    auto pathvec = split_string_on_char(path, '/');
-    if (pathvec.size() == 0)
-        return std::nullopt;
+    if (path.empty())
+        return ROOT_DIR_INUM;
 
-    if (pathvec.size() == 1)
-        return std::optional(ROOT_DIR_INUM);
+    auto pathvec = split_string_on_char(path, '/');
+    if (pathvec.size() <= 1)
+        return ROOT_DIR_INUM;
 
     auto cur_inode_num = ROOT_DIR_INUM;
-    for (auto it = pathvec.begin(); it != pathvec.end(); it++) {
+    // Start at +1 because the 0th entry is the empty '/' component
+    for (auto it = pathvec.begin() + 1; it != pathvec.end(); it++) {
         auto cur_inode = inodes.get_copy(cur_inode_num);
         // cur_inode = resolve_symlink_recur(cur_inode);
         if (!cur_inode.has_value())

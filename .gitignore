@@ -53,6 +53,7 @@ measure/passwd-s3fs
 code/s3.config
 *.db
 
+objectfs
 objfs-mount
 s3.config
 secrets.md

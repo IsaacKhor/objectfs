@@ -1,8 +1,8 @@
-CC = clang
+CC = gcc
 CXX = g++-12
-CXXFLAGS = -Wall -Wextra -Wconversion
+CXXFLAGS = -Wall -Wextra -Wconversion -Wdouble-promotion -Wno-sign-conversion
 CXXFLAGS += -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -fno-sanitize=null -fno-sanitize=alignment
-CXXFLAGS += -std=c++2b -g -fPIC -I../libs3/inc
+CXXFLAGS += -std=c++2b -g3 -fPIC -I../libs3/inc
 CXXLIBS = -lfuse -L../libs3/lib -ls3 -lfmt
 
 all: objectfs

@@ -11,6 +11,7 @@ std::unique_ptr<FSObject> FSObject::create_file(inum_t inode_num, mode_t perms)
 {
     auto fo = std::make_unique<FSObject>(inode_num, perms);
     fo->data.emplace<FSFile>();
+    fo->permissions |= S_IFREG;
     return fo;
 }
 
@@ -19,6 +20,7 @@ FSObject::create_directory(inum_t parent_inum, inum_t self_inum, mode_t perms)
 {
     auto fo = std::make_unique<FSObject>(self_inum, perms);
     fo->data.emplace<FSDirectory>(parent_inum);
+    fo->permissions |= S_IFDIR;
     return fo;
 }
 

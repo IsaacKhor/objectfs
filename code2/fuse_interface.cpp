@@ -38,7 +38,7 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     auto ofs = static_cast<ObjectFS *>(fuse_get_context()->private_data);
     auto inum = ofs->create_file(path, mode);
     fi->fh = inum;
-    return 0;
+    return inum;
 }
 
 int fs_unlink(const char *path)
@@ -105,10 +105,6 @@ int fs_getattr(const char *path, struct stat *stbuf)
     stbuf->st_atime = 0;
     stbuf->st_mtime = 0;
     stbuf->st_ctime = 0;
-
-    debug("getattr: %s, inode %lu, mode %o, uid %u, gid %u, size %lu", path,
-          stbuf->st_ino, stbuf->st_mode, stbuf->st_uid, stbuf->st_gid,
-          stbuf->st_size);
 
     return 0;
 }
@@ -229,7 +225,7 @@ int main(int argc, char **argv)
     fuse_opt_add_arg(&args, "-odefault_permissions");
     fuse_opt_add_arg(&args, "-oauto_unmount");
     // fuse_opt_add_arg(&args, "-okernel_cache");
-    // fuse_opt_add_arg(&args, "-ouse_ino");
+    fuse_opt_add_arg(&args, "-ouse_ino");
 
     auto s3_host = std::getenv("S3_HOSTNAME");
     auto s3_access = std::getenv("S3_ACCESS_KEY_ID");
