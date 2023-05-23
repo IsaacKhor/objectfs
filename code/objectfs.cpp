@@ -60,9 +60,6 @@ inum_t ObjectFS::create_file(std::string path, mode_t mode)
     auto filename = path.substr(path.find_last_of('/') + 1);
     auto parent_dirname = path.substr(0, path.find_last_of('/'));
 
-    debug("create_file: path=%s, filename=%s, parent_dirname=%s", path.c_str(),
-          filename.c_str(), parent_dirname.c_str());
-
     auto parent_inode_num = path_to_inode_num(parent_dirname);
     if (!parent_inode_num.has_value())
         return -ENOENT;
@@ -355,7 +352,7 @@ ObjectFS::make_directory(std::string parent, std::string dirname, mode_t mode)
     {
         std::unique_lock<std::shared_mutex> lock(parent_fsobj->mtx);
 
-        if (!parent_dir.get_child(dirname).has_value())
+        if (parent_dir.get_child(dirname).has_value())
             return -EEXIST;
 
         auto newdir_inum = allocate_inode_num();

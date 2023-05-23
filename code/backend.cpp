@@ -1,5 +1,7 @@
-#include "backend.hpp"
 #include <fmt/core.h>
+
+#include "backend.hpp"
+#include "utils.hpp"
 
 S3ObjectStore::S3ObjectStore(std::string _host, std::string _bucket_name,
                              std::string _access_key, std::string _secret_key,
@@ -38,11 +40,12 @@ S3Status S3ObjectStore::list(std::string prefix, std::vector<std::string> &keys)
 }
 
 ObjectBackend::ObjectBackend(S3ObjectStore s3, size_t cache_size,
-                                      size_t log_capacity,
-                                      size_t log_rollover_threshold)
+                             size_t log_capacity, size_t log_rollover_threshold)
     : s3(s3), log(new std::byte[log_capacity]), log_capacity(log_capacity),
       log_rollover_threshold(log_rollover_threshold)
 {
+    // reserve space for the object header
+    log_len.store(sizeof(BackendObjectHeader));
 }
 
 ObjectBackend::~ObjectBackend() { delete[] log; }
@@ -54,7 +57,28 @@ std::string ObjectBackend::get_obj_name(objectid_t id)
 
 void ObjectBackend::get_obj_segment(ObjectSegment seg, byte *buf)
 {
+    // First check the active log
+    {
+        std::shared_lock lock(log_mutex);
+        if (seg.object_id == active_object_id) {
+            memcpy(buf, log + seg.offset, seg.len);
+            return;
+        }
+    }
+
+    // If it's not in the active log, check pending writes
+    auto pending = pending_queue.get_copy(seg.object_id);
+    if (pending.has_value()) {
+        auto sp = pending.value();
+        memcpy(buf, sp.get() + seg.offset, seg.len);
+        return;
+    }
+
+    // If it's not pending, check our cache
     // TODO implement caching
+
+    // If everything above fails, we have to fetch it from the backend
+    // TODO after fetching, put it into the cache
 
     auto key = get_obj_name(seg.object_id);
     s3.get(key, seg.offset, buf, seg.len);
@@ -130,6 +154,7 @@ void ObjectBackend::rollover_log()
 
     // push to backend
     auto object_name = get_obj_name(old_id);
+    debug("pushing '%s' to backend, len %i", object_name.c_str(), hdr->len);
     s3.put(object_name, log, log_len);
 
     // We only erase from the queue *after* the push is complete

@@ -33,7 +33,7 @@ class ObjectFS
     S3ObjectStore s3;
     ObjectBackend obj_backend;
 
-    std::atomic<inum_t> next_inode_num = 0;
+    std::atomic<inum_t> next_inode_num = 100;
 
     /**
      * Resolve symlinks recursively, and if the target does not exist,

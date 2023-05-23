@@ -38,7 +38,7 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     auto ofs = static_cast<ObjectFS *>(fuse_get_context()->private_data);
     auto inum = ofs->create_file(path, mode);
     fi->fh = inum;
-    return inum;
+    return 0;
 }
 
 int fs_unlink(const char *path)
