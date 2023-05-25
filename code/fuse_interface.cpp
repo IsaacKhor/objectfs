@@ -11,6 +11,8 @@ void *fs_init(struct fuse_conn_info *conn)
     S3ObjectStore *store =
         static_cast<S3ObjectStore *>(fuse_get_context()->private_data);
     ObjectFS *objfs = new ObjectFS(*store);
+
+    log_info("Log level: {}", LOGLV);
     return (void *)objfs;
 }
 
@@ -144,7 +146,7 @@ int fs_statfs(const char *path, struct statvfs *st)
 
 int fs_opendir(const char *path, struct fuse_file_info *fi)
 {
-    //noop
+    // noop
     return 0;
 }
 
@@ -166,10 +168,16 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
             .st_ctim = 0,
         };
         auto has_space = filler(buf, entry.name.c_str(), &st, 0);
-        if (has_space == 0)
+        if (has_space != 0)
             break;
     }
 
+    return 0;
+}
+
+int fs_utimens(const char *path, const struct timespec tv[2])
+{
+    // noop
     return 0;
 }
 
@@ -206,7 +214,7 @@ struct fuse_operations fs_ops = {
     .access = NULL,
     .create = fs_create,
     .lock = NULL,
-    .utimens = NULL,
+    .utimens = fs_utimens,
     .bmap = NULL,
     .ioctl = NULL,
     .poll = NULL,
@@ -226,14 +234,18 @@ int main(int argc, char **argv)
     fuse_opt_add_arg(&args, "-oauto_unmount");
     // fuse_opt_add_arg(&args, "-okernel_cache");
     fuse_opt_add_arg(&args, "-ouse_ino");
+    fuse_opt_add_arg(&args, "-ouse_ino");
+    // fuse_opt_add_arg(&args, "-obig_writes");
+    // fuse_opt_add_arg(&args, "-omax_write=1048576");
+    // fuse_opt_add_arg(&args, "-omax_read=4096");
 
     auto s3_host = std::getenv("S3_HOSTNAME");
     auto s3_access = std::getenv("S3_ACCESS_KEY_ID");
     auto s3_secret = std::getenv("S3_SECRET_ACCESS_KEY");
     auto s3_bucket_name = std::getenv("S3_TEST_BUCKET_NAME");
 
-    debug("Mounting %s/%s (%s:%s)", s3_host, s3_bucket_name, s3_access,
-          s3_secret);
+    log_info("Mounting {}/{} ({}:{})", s3_host, s3_bucket_name, s3_access,
+             s3_secret);
 
     S3ObjectStore store(s3_host, s3_bucket_name, s3_access, s3_secret, false);
     return fuse_main(args.argc, args.argv, &fs_ops, &store);

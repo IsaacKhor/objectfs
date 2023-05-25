@@ -46,6 +46,8 @@ class ObjectFS
     ObjectFS(S3ObjectStore s3);
     ~ObjectFS();
 
+    void apply_log_entry(LogObjectVar entry);
+
     std::optional<inum_t> path_to_inode_num(std::string path);
 
     inum_t create_file(std::string path, mode_t mode);

@@ -55,14 +55,25 @@ std::string ObjectBackend::get_obj_name(objectid_t id)
     return fmt::format("objectfs_{:016x}.log", id);
 }
 
-void ObjectBackend::get_obj_segment(ObjectSegment seg, byte *buf)
+std::optional<objectid_t> ObjectBackend::parse_obj_name(std::string name)
+{
+    if (!name.starts_with("objectfs_"))
+        return std::nullopt;
+    auto id_str = name.substr(9, 25);
+    auto parsed = std::stoull(id_str, nullptr, 16);
+    if (parsed == 0 || parsed == ULLONG_MAX)
+        return std::nullopt;
+    return parsed;
+}
+
+bool ObjectBackend::get_obj_segment(ObjectSegment seg, byte *buf)
 {
     // First check the active log
     {
         std::shared_lock lock(log_mutex);
         if (seg.object_id == active_object_id) {
             memcpy(buf, log + seg.offset, seg.len);
-            return;
+            return false;
         }
     }
 
@@ -71,7 +82,7 @@ void ObjectBackend::get_obj_segment(ObjectSegment seg, byte *buf)
     if (pending.has_value()) {
         auto sp = pending.value();
         memcpy(buf, sp.get() + seg.offset, seg.len);
-        return;
+        return false;
     }
 
     // If it's not pending, check our cache
@@ -81,7 +92,7 @@ void ObjectBackend::get_obj_segment(ObjectSegment seg, byte *buf)
     // TODO after fetching, put it into the cache
 
     auto key = get_obj_name(seg.object_id);
-    s3.get(key, seg.offset, buf, seg.len);
+    return s3.get(key, seg.offset, buf, seg.len) == S3StatusOK;
 }
 
 ObjectSegment ObjectBackend::append_fixed(size_t len, void *data)
@@ -163,12 +174,104 @@ void ObjectBackend::rollover_log()
 
     // push to backend
     auto object_name = get_obj_name(old_id);
-    debug("pushing '%s' to backend, len %i", object_name.c_str(), hdr->len);
-    s3.put(object_name, old_log, log_len);
+    debug("pushing {} to backend, len {}", object_name, hdr->len);
+    s3.put(object_name, old_log, old_len);
 
     // We only erase from the queue *after* the push is complete
     // TODO consider directly putting all the blocks into the cache
     pending_queue.erase(old_id);
+}
+
+std::pair<std::vector<LogObjectVar>, std::unique_ptr<byte[]>>
+ObjectBackend::fetch_and_parse_object(std::string obj_name)
+{
+    auto object_id = parse_obj_name(obj_name);
+    if (object_id == std::nullopt) {
+        log_error("invalid object name {}", obj_name);
+        throw std::runtime_error("invalid object id");
+    }
+
+    // Fetch the header to get the size of the log
+    auto buf = new std::byte[log_capacity];
+    std::unique_ptr<byte[]> buf_ptr(buf);
+    auto ret = s3.get(obj_name, 0, buf, sizeof(BackendObjectHeader));
+    if (ret != S3StatusOK)
+        throw std::runtime_error("failed to fetch object from backend");
+
+    // Validate that data header is correct
+    auto hdr = reinterpret_cast<BackendObjectHeader *>(buf);
+    if (hdr->magic != OBJECTFS_MAGIC)
+        throw std::runtime_error("invalid magic number in object header");
+    if (hdr->object_id != object_id.value())
+        throw std::runtime_error("object id mismatch in object header");
+
+    // Fetch the rest of the object
+    auto log_length = hdr->len;
+    ret = s3.get(obj_name, 0, buf, log_length + sizeof(BackendObjectHeader));
+    if (ret != S3StatusOK)
+        throw std::runtime_error("failed to fetch object from backend");
+
+    std::vector<LogObjectVar> logobjs;
+    byte *log = buf + sizeof(BackendObjectHeader);
+    byte *log_end = buf + log_length;
+
+    while (log < log_end) {
+        auto log_base = reinterpret_cast<LogObjectBase *>(log);
+        switch (log_base->type) {
+        case LogObjectType::SetFileData: {
+            auto logobj = reinterpret_cast<LogSetFileData *>(log);
+            logobjs.push_back(logobj);
+            log += sizeof(LogSetFileData) + logobj->data_len;
+            break;
+        }
+        case LogObjectType::TruncateFile: {
+            auto logobj = reinterpret_cast<LogTruncateFile *>(log);
+            logobjs.push_back(logobj);
+            log += sizeof(LogTruncateFile);
+            break;
+        }
+        case LogObjectType::ChangeFilePermissions: {
+            auto logobj = reinterpret_cast<LogChangeFilePerms *>(log);
+            logobjs.push_back(logobj);
+            log += sizeof(LogChangeFilePerms);
+            break;
+        }
+        case LogObjectType::ChangeFileOwners: {
+            auto logobj = reinterpret_cast<LogChangeFileOwners *>(log);
+            logobjs.push_back(logobj);
+            log += sizeof(LogChangeFileOwners);
+            break;
+        }
+        case LogObjectType::MakeDirectory: {
+            auto logobj = reinterpret_cast<LogMakeDirectory *>(log);
+            logobjs.push_back(logobj);
+            log += sizeof(LogMakeDirectory) + logobj->name_len;
+            break;
+        }
+        case LogObjectType::RemoveDirectory: {
+            auto logobj = reinterpret_cast<LogRemoveDirectory *>(log);
+            logobjs.push_back(logobj);
+            log += sizeof(LogRemoveDirectory);
+            break;
+        }
+        case LogObjectType::CreateFile: {
+            auto logobj = reinterpret_cast<LogCreateFile *>(log);
+            logobjs.push_back(logobj);
+            log += sizeof(LogCreateFile) + logobj->name_len;
+            break;
+        }
+        case LogObjectType::RemoveFile: {
+            auto logobj = reinterpret_cast<LogRemoveFile *>(log);
+            logobjs.push_back(logobj);
+            log += sizeof(LogRemoveFile);
+            break;
+        }
+        default:
+            throw std::runtime_error("invalid log object type");
+        }
+    }
+
+    return std::make_pair(std::move(logobjs), std::move(buf_ptr));
 }
 
 ObjectSegment ObjectBackend::append_logobj(LogTruncateFile &logobj)

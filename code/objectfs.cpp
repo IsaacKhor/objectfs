@@ -1,4 +1,5 @@
-#include <set>
+#include <algorithm>
+#include <future>
 #include <sys/stat.h>
 
 #include "models.hpp"
@@ -11,6 +12,10 @@ const size_t LOG_ROLLOVER_BYTES = 10 * 1024 * 1024;
 
 const inum_t ROOT_DIR_INUM = 1;
 
+template <class... Ts> struct overloaded : Ts... {
+    using Ts::operator()...;
+};
+
 ObjectFS::ObjectFS(S3ObjectStore s3)
     : s3(s3), obj_backend(s3, CACHE_ENTRIES_SIZE, LOG_CAPACITY_BYTES,
                           LOG_ROLLOVER_BYTES)
@@ -19,11 +24,98 @@ ObjectFS::ObjectFS(S3ObjectStore s3)
     auto root = FSObject::create_directory(ROOT_DIR_INUM, ROOT_DIR_INUM, 0755);
     inodes.insert(ROOT_DIR_INUM, std::move(root));
 
-    // Replay log
-    // auto logobjs = s3.list();
+    std::vector<std::string> objects;
+    auto logobjs = s3.list("objectfs", objects);
+    if (logobjs != S3StatusOK) {
+        throw std::runtime_error("Failed to list objects in objectfs bucket");
+        return;
+    }
+
+    log_info("Found {} objects in objectfs bucket", objects.size());
+
+    // Make sure they are sorted in the proper order
+    std::sort(objects.begin(), objects.end());
+
+    auto replay_entries = 0;
+    // TODO replay from latest checkpoint
+    for (auto &backend_obj_name : objects) {
+        debug("Replaying object {}", backend_obj_name);
+        auto [log_entries, backing] =
+            obj_backend.fetch_and_parse_object(backend_obj_name);
+
+        for (auto &entry : log_entries) {
+            apply_log_entry(entry);
+            replay_entries++;
+        }
+    }
+
+    log_info("Replayed {} entries, filesystem initialised", replay_entries);
 }
 
-ObjectFS::~ObjectFS() {}
+/**
+ * Replay log entries. It's not important for this to be fast or thread-safe,
+ * we just replay each entry in order
+ */
+void ObjectFS::apply_log_entry(LogObjectVar entry)
+{
+    std::visit(
+        overloaded{
+            [&](LogSetFileData *lo) {
+                // noop for now
+                return;
+            },
+            [&](LogTruncateFile *lo) {
+                auto &file = inodes.get_copy(lo->inode_num).value()->get_file();
+                file.truncate_to(lo->new_size);
+            },
+            [&](LogChangeFilePerms *lo) {
+                auto fso = inodes.get_copy(lo->inode_num).value();
+                fso->update_permissions(lo->new_perms);
+            },
+            [&](LogChangeFileOwners *lo) {
+                auto fso = inodes.get_copy(lo->inode_num).value();
+                fso->update_owners(lo->new_uid, lo->new_gid);
+            },
+            [&](LogMakeDirectory *lo) {
+                auto &parent =
+                    inodes.get_copy(lo->parent_inum).value()->get_directory();
+                auto newdir = FSObject::create_directory(
+                    lo->parent_inum, lo->self_inum, lo->permissions);
+                auto name = std::string(lo->name, lo->name_len);
+                parent.add_child(name, lo->self_inum);
+                inodes.insert(lo->self_inum, std::move(newdir));
+            },
+            [&](LogRemoveDirectory *lo) {
+                auto &parent =
+                    inodes.get_copy(lo->parent_inum).value()->get_directory();
+                parent.remove_child(lo->removed_inum);
+                inodes.erase(lo->removed_inum);
+            },
+            [&](LogCreateFile *lo) {
+                auto &parent =
+                    inodes.get_copy(lo->parent_inum).value()->get_directory();
+                auto newfile = FSObject::create_file(lo->self_inum, lo->mode);
+                auto name = std::string(lo->name, lo->name_len);
+                parent.add_child(name, lo->self_inum);
+                inodes.insert(lo->self_inum, std::move(newfile));
+            },
+            [&](LogRemoveFile *lo) {
+                auto &parent =
+                    inodes.get_copy(lo->parent_inum).value()->get_directory();
+                parent.remove_child(lo->removed_inum);
+                inodes.erase(lo->removed_inum);
+            },
+        },
+        entry);
+}
+
+ObjectFS::~ObjectFS()
+{
+    obj_backend.rollover_log();
+    // TODO write out a checkpoint
+
+    log_info("ObjectFS shutting down");
+}
 
 inum_t ObjectFS::allocate_inode_num() { return next_inode_num.fetch_add(1); }
 
@@ -75,6 +167,7 @@ inum_t ObjectFS::create_file(std::string path, mode_t mode)
         .parent_inum = parent_inode_num.value(),
         .self_inum = new_inum,
         .mode = mode,
+        .name_len = filename.size(),
     };
 
     auto &parent_dir = parent_obj->get_directory();
@@ -106,7 +199,7 @@ int ObjectFS::delete_file(std::string path)
     auto &parent_dir = parent_obj->get_directory();
     LogRemoveFile logobj = {
         .type = LogObjectType::RemoveFile,
-        .parent_dir_inum = parent_inode_num.value(),
+        .parent_inum = parent_inode_num.value(),
         .removed_inum = inode_num.value(),
     };
 
@@ -121,7 +214,8 @@ int ObjectFS::delete_file(std::string path)
     return 0;
 }
 
-int ObjectFS::read_file(inum_t inum, size_t buf_offset, size_t len, byte *buf)
+int ObjectFS::read_file(inum_t inum, size_t read_start_offset, size_t len,
+                        byte *buf)
 {
     auto fsobj_opt = inodes.get_copy(inum);
     // fsobj = resolve_symlink_recur(fsobj);
@@ -134,21 +228,22 @@ int ObjectFS::read_file(inum_t inum, size_t buf_offset, size_t len, byte *buf)
 
     auto &file = fsobj->get_file();
 
-    // Get all extents that overlap with the file in question. This is the only
-    // time we need to lock the file because once we get the extents, we can
-    // just read from the backend without locking.
-    // NOTE when adding GC, could do it like this: the GC copies the live data
-    // somewhere else, then grab a write lock to modify extents. Only after the
-    // extents are written do we delete the old data. This way, we don't need to
-    // worry about the objects disappearing underneath us
+    // Get all extents that overlap with the file in question. This is the
+    // only time we need to lock the file because once we get the extents,
+    // we can just read from the backend without locking. NOTE when adding
+    // GC, could do it like this: the GC copies the live data somewhere
+    // else, then grab a write lock to modify extents. Only after the
+    // extents are written do we delete the old data. This way, we don't
+    // need to worry about the objects disappearing underneath us
     std::vector<std::pair<int64_t, ObjectSegment>> extents;
     {
         std::shared_lock<std::shared_mutex> lock(fsobj->mtx);
-        extents = file.segments_in_range(buf_offset, len);
+        extents = file.segments_in_range(read_start_offset, len);
     }
 
-    for (auto &[file_offest, segment] : extents) {
-        obj_backend.get_obj_segment(segment, buf + file_offest - buf_offset);
+    for (auto &[file_extent_offset, segment] : extents) {
+        obj_backend.get_obj_segment(segment, buf + file_extent_offset -
+                                                 read_start_offset);
     }
 
     return len;
@@ -318,7 +413,7 @@ int ObjectFS::change_ownership(std::string path, uid_t uid, gid_t gid)
         return -ENOENT;
 
     LogChangeFileOwners logobj = {
-        .type = LogObjectType::ChangeFilePermissions,
+        .type = LogObjectType::ChangeFileOwners,
         .inode_num = inode_num.value(),
         .new_uid = uid,
         .new_gid = gid,
@@ -364,6 +459,7 @@ ObjectFS::make_directory(std::string parent, std::string dirname, mode_t mode)
             .parent_inum = parent_inum.value(),
             .self_inum = newdir_inum,
             .permissions = mode,
+            .name_len = dirname.size(),
         };
         obj_backend.append_logobj(logobj, dirname);
 
@@ -385,7 +481,7 @@ int ObjectFS::remove_directory(std::string path)
         return -ENOENT;
 
     auto fsobj = fsobj_opt.value();
-    if (fsobj->is_directory())
+    if (!fsobj->is_directory())
         return -ENOTDIR;
 
     auto &dir = fsobj->get_directory();
@@ -403,10 +499,12 @@ int ObjectFS::remove_directory(std::string path)
 
         LogRemoveDirectory logobj = {
             .type = LogObjectType::RemoveDirectory,
+            .parent_inum = parent_inum,
             .removed_inum = inode_num.value(),
         };
         obj_backend.append_logobj(logobj);
         parent_dir.remove_child(inode_num.value());
+        inodes.erase(inode_num.value());
     }
 
     return 0;

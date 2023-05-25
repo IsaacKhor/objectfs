@@ -164,11 +164,11 @@ struct BackendObjectHeader {
     size_t len;
 };
 
-
 enum class LogObjectType : uint8_t {
     SetFileData = 1,
     TruncateFile,
     ChangeFilePermissions,
+    ChangeFileOwners,
     MakeDirectory,
     RemoveDirectory,
     CreateFile,
@@ -183,6 +183,7 @@ struct LogSetFileData {
     LogObjectType type;
     inum_t inode_num;
     size_t file_offset;
+    // size_t log_data_offset;
     size_t data_len;
     byte data[];
 };
@@ -218,6 +219,7 @@ struct LogMakeDirectory {
 struct LogRemoveDirectory {
     LogObjectType type;
     /** index by inum because we assume no hardlinks. */
+    inum_t parent_inum;
     inum_t removed_inum;
 };
 
@@ -232,6 +234,11 @@ struct LogCreateFile {
 
 struct LogRemoveFile {
     LogObjectType type;
-    inum_t parent_dir_inum;
+    inum_t parent_inum;
     inum_t removed_inum;
 };
+
+using LogObjectVar =
+    std::variant<LogSetFileData *, LogTruncateFile *, LogChangeFilePerms *,
+                 LogChangeFileOwners *, LogMakeDirectory *,
+                 LogRemoveDirectory *, LogCreateFile *, LogRemoveFile *>;

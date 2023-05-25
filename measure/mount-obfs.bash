@@ -7,11 +7,12 @@ echo "Starting OBFS with backend $S3_HOSTNAME and bucket $S3_TEST_BUCKET_NAME"
 sudo umount -l /mnt/fsbench
 sudo rm -rf /mnt/fsbench/*
 s3 -u create $S3_TEST_BUCKET_NAME
+source ../venv/bin/activate
 python3 delete_bucket_files.py $S3_TEST_BUCKET_NAME
 
 cd ../code
 make clean
-make release
+make -j8 release
 
 echo "Starting OBFS"
 ./objectfs -f /mnt/fsbench

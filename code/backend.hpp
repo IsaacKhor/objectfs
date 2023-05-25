@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iterator>
 #include <libs3.h>
 #include <string>
 #include <vector>
@@ -35,7 +36,7 @@ class ObjectBackend
     ConcurrentMap<objectid_t, std::shared_ptr<byte[]>> pending_queue;
 
     // log
-    objectid_t active_object_id = 1;
+    objectid_t active_object_id = 16;
     std::byte *log;
     std::atomic_size_t log_len = sizeof(BackendObjectHeader);
     std::shared_mutex log_mutex;
@@ -46,15 +47,19 @@ class ObjectBackend
     bool cache_disabled = true;
 
     std::string get_obj_name(objectid_t id);
+    std::optional<objectid_t> parse_obj_name(std::string name);
 
   public:
     explicit ObjectBackend(S3ObjectStore s3, size_t cache_size,
                            size_t log_capacity, size_t log_rollover_threshold);
     ~ObjectBackend();
 
+    std::pair<std::vector<LogObjectVar>, std::unique_ptr<byte[]>>
+    fetch_and_parse_object(std::string);
+
     /**
-     * Force a rollover and push to the backend of the current log. Will block
-     * until the HTTP request comes back.
+     * Force a rollover and push to the backend of the current log. Will
+     * block until the HTTP request comes back.
      */
     void rollover_log();
     void maybe_rollover();
@@ -68,7 +73,7 @@ class ObjectBackend
      *
      * TODO: return some sort of indication about whether we succeded
      */
-    void get_obj_segment(ObjectSegment seg, byte *buf);
+    bool get_obj_segment(ObjectSegment seg, byte *buf);
 
     /**
      * Append a log operation to the log. This returns the raw object segment

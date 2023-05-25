@@ -1,36 +1,45 @@
 CC = gcc
 CXX = g++-12
-CXXFLAGS = -Wall -Wextra -Wconversion -Wdouble-promotion -Wno-sign-conversion
-CXXFLAGS += -std=c++2b -fPIC -I../libs3/inc
+CXXFLAGS = -std=c++2b -fPIC -I../libs3/inc
 CXXLIBS = -lfuse -L../libs3/lib -ls3 -lfmt
 
-debug: CXXFLAGS += -g3 -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -fno-sanitize=null -fno-sanitize=alignment
-release: CXXFLAGS += -O3 -DENABLE_DEBUG=0
+mount_path = /tmp/obfs-test
+
+debug: CXXFLAGS += -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -fno-sanitize=null -fno-sanitize=alignment
+debug: CXXFLAGS += -Wall -Wextra -Wconversion -Wdouble-promotion -Wno-sign-conversion
+debug: CXXFLAGS += -g3 -DLOGLV=0
+release: CXXFLAGS += -O3 -DLOGLV=2
 
 debug: objectfs
 release: objectfs
 
-all: debug
+all: release
 
-backend.o: backend.cpp backend.hpp
-	$(CXX) -c backend.cpp $(CXXFLAGS) -o backend.o
+# $< is the first dependency
+# $@ is the target file
+# $^ is all dependencies
+# $* is the target file without the extension (the % part)
 
-objectfs.o: objectfs.cpp objectfs.hpp
-	$(CXX) -c objectfs.cpp $(CXXFLAGS) -o objectfs.o
-
-models.o: models.cpp models.hpp
-	$(CXX) -c models.cpp $(CXXFLAGS) -o models.o
-
-s3wrap.o: s3wrap.cpp s3wrap.hpp
-	$(CXX) -c s3wrap.cpp $(CXXFLAGS) -o s3wrap.o
-
-fuse_interface.o: fuse_interface.cpp 
-	$(CXX) -c fuse_interface.cpp $(CXXFLAGS) -o fuse_interface.o
+%.o: %.cpp *.hpp
+	$(CXX) -c $< $(CXXFLAGS) -o $@
 
 objectfs: backend.o objectfs.o models.o s3wrap.o fuse_interface.o
-	$(CXX) backend.o objectfs.o models.o s3wrap.o fuse_interface.o -o objectfs $(CXXFLAGS) $(CXXLIBS)
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(CXXLIBS)
 
-.PHONY: clean
+.PHONY: clean run-debug run-release
+
+run-debug: export LSAN_OPTIONS=suppressions=./.asan_suppress
+run-debug: export ASAN_OPTIONS=abort_on_error=1:halt_on_error=1
+run-debug: export UBSAN_OPTIONS=abort_on_error=1:halt_on_error=1
+run-debug: debug
+	mkdir -p $(mount_path)
+	rm -rf $(mount_path)/*
+	./objectfs -f $(mount_path)
+
+run-release: release
+	mkdir -p $(mount_path)
+	rm -rf $(mount_path)/*
+	./objectfs -f $(mount_path)
 
 clean:
 	rm -f *.o objectfs
