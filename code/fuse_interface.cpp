@@ -162,7 +162,7 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
             .st_mode = entry.mode,
             .st_uid = entry.uid,
             .st_gid = entry.gid,
-            .st_size = entry.size,
+            .st_size = (long)entry.size,
             .st_atim = 0,
             .st_mtim = 0,
             .st_ctim = 0,
@@ -234,15 +234,20 @@ int main(int argc, char **argv)
     fuse_opt_add_arg(&args, "-oauto_unmount");
     // fuse_opt_add_arg(&args, "-okernel_cache");
     fuse_opt_add_arg(&args, "-ouse_ino");
-    fuse_opt_add_arg(&args, "-ouse_ino");
-    // fuse_opt_add_arg(&args, "-obig_writes");
-    // fuse_opt_add_arg(&args, "-omax_write=1048576");
-    // fuse_opt_add_arg(&args, "-omax_read=4096");
+    fuse_opt_add_arg(&args, "-obig_writes");
+    fuse_opt_add_arg(&args, "-omax_write=1048576");
+    fuse_opt_add_arg(&args, "-omax_read=1048576");
 
     auto s3_host = std::getenv("S3_HOSTNAME");
     auto s3_access = std::getenv("S3_ACCESS_KEY_ID");
     auto s3_secret = std::getenv("S3_SECRET_ACCESS_KEY");
     auto s3_bucket_name = std::getenv("S3_TEST_BUCKET_NAME");
+
+    if (s3_host == nullptr || s3_access == nullptr || s3_secret == nullptr ||
+        s3_bucket_name == nullptr) {
+        log_error("Missing environment variables");
+        return 1;
+    }
 
     log_info("Mounting {}/{} ({}:{})", s3_host, s3_bucket_name, s3_access,
              s3_secret);

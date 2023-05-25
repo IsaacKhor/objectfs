@@ -1,43 +1,8 @@
 #include <fmt/core.h>
+#include <libs3.h>
 
 #include "backend.hpp"
 #include "utils.hpp"
-
-S3ObjectStore::S3ObjectStore(std::string _host, std::string _bucket_name,
-                             std::string _access_key, std::string _secret_key,
-                             bool encrypted)
-    : s3wrap(_host.c_str(), _bucket_name.c_str(), _access_key.c_str(),
-             _secret_key.c_str(), encrypted)
-{
-}
-
-S3ObjectStore::~S3ObjectStore() {}
-
-S3Status S3ObjectStore::get(std::string key, size_t offset, void *buf,
-                            size_t len)
-{
-    iovec iov = {.iov_base = buf, .iov_len = len};
-    return s3wrap.s3_get(key, offset, len, &iov, 1);
-}
-
-S3Status S3ObjectStore::put(std::string key, void *buf, size_t len)
-{
-    iovec iov = {.iov_base = buf, .iov_len = len};
-    return s3wrap.s3_put(key, &iov, 1);
-}
-
-S3Status S3ObjectStore::del(std::string key) { return s3wrap.s3_delete(key); }
-
-S3Status S3ObjectStore::list(std::string prefix, std::vector<std::string> &keys)
-{
-    std::list<std::string> keys_list;
-    S3Status status = s3wrap.s3_list(prefix, keys_list);
-    if (status != S3StatusOK)
-        return status;
-
-    keys = std::vector<std::string>(keys_list.begin(), keys_list.end());
-    return S3StatusOK;
-}
 
 ObjectBackend::ObjectBackend(S3ObjectStore s3, size_t cache_size,
                              size_t log_capacity, size_t log_rollover_threshold)
@@ -317,4 +282,122 @@ ObjectSegment ObjectBackend::append_logobj(LogCreateFile &logobj,
 {
     return append_fixed_2(sizeof(LogCreateFile), &logobj, name.size(),
                           name.data());
+}
+
+extern "C" S3Status callback_resp_props(const S3ResponseProperties *p,
+                                        void *data);
+extern "C" void callback_resp_complete(S3Status status,
+                                       const S3ErrorDetails *error, void *data);
+
+S3ObjectStore::S3ObjectStore(std::string _host, std::string _bucket_name,
+                             std::string _access_key, std::string _secret_key,
+                             bool encrypted)
+    : s3wrap(_host.c_str(), _bucket_name.c_str(), _access_key.c_str(),
+             _secret_key.c_str(), encrypted),
+      host(_host), bucket(_bucket_name), access(_access_key),
+      secret(_secret_key),
+      protocol(encrypted ? S3ProtocolHTTPS : S3ProtocolHTTP)
+{
+    bucket_ctx = {
+        .hostName = host.c_str(),
+        .bucketName = bucket.c_str(),
+        .protocol = protocol,
+        .uriStyle = S3UriStylePath,
+        .accessKeyId = access.c_str(),
+        .secretAccessKey = secret.c_str(),
+        .securityToken = NULL,
+        .authRegion = NULL,
+    };
+
+    resp_handler = {
+        .propertiesCallback = callback_resp_props,
+        .completeCallback = callback_resp_complete,
+    };
+}
+
+S3ObjectStore::~S3ObjectStore() {}
+
+struct S3CallbackCtx {
+    S3Status request_status;
+    void *buf;
+    size_t requested_len;
+    size_t transferred_len;
+    std::optional<std::string> err_msg;
+};
+
+extern "C" S3Status callback_resp_props(const S3ResponseProperties *p,
+                                        void *data)
+{
+    // no-op
+    return S3StatusOK;
+}
+
+extern "C" void callback_resp_complete(S3Status status,
+                                       const S3ErrorDetails *error, void *data)
+{
+    auto ctx = static_cast<S3CallbackCtx *>(data);
+    ctx->request_status = status;
+
+    if (error != NULL)
+        ctx->err_msg =
+            fmt::format("S3 error: resource={}, message={}, details={}",
+                        error->resource || "", error->message || "",
+                        error->furtherDetails || "");
+    // log_error("{}", ctx->err_msg.value());
+}
+
+extern "C" S3Status receive_data_cb(int size, const char *buf, void *data)
+{
+    auto ctx = static_cast<S3CallbackCtx *>(data);
+
+    // sanity bounds-check
+    if (ctx->transferred_len + size > ctx->requested_len) {
+        log_error("buffer overrun: requested {}, but transferred {}, size {}",
+                  ctx->requested_len, ctx->transferred_len, size);
+        return S3StatusAbortedByCallback;
+    }
+
+    memcpy(ctx->buf + ctx->transferred_len, buf, size);
+    ctx->transferred_len += size;
+    return S3StatusOK;
+}
+
+S3Status S3ObjectStore::get(std::string key, size_t offset, void *buf,
+                            size_t len)
+{
+    S3GetObjectHandler h = {
+        .responseHandler = resp_handler,
+        .getObjectDataCallback = receive_data_cb,
+    };
+
+    S3CallbackCtx ctx = {
+        .request_status = S3StatusOK,
+        .buf = buf,
+        .requested_len = len,
+        .transferred_len = 0,
+    };
+
+    S3_get_object(&bucket_ctx, key.c_str(), NULL, offset, len, NULL, 0, &h,
+                  &ctx);
+
+    return ctx.request_status;
+}
+
+S3Status S3ObjectStore::put(std::string key, void *buf, size_t len)
+{
+    iovec iov = {.iov_base = buf, .iov_len = len};
+    return s3wrap.s3_put(key, &iov, 1);
+}
+
+S3Status S3ObjectStore::del(std::string key) { return s3wrap.s3_delete(key); }
+
+S3Status S3ObjectStore::list(std::string prefix, std::vector<std::string> &keys)
+{
+    std::list<std::string> keys_list;
+    S3Status status = s3wrap.s3_list(prefix, keys_list);
+    if (status != S3StatusOK)
+        return status;
+
+    keys = std::vector<std::string>(keys_list.begin(), keys_list.end());
+    return S3StatusOK;
 }

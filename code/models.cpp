@@ -57,6 +57,7 @@ FSFile::segments_in_range(int64_t file_offset, size_t range_len)
     auto front_adjust = file_offset - front_offset;
     front_seg.offset += front_adjust;
     front_seg.len -= front_adjust;
+    front_offset += front_adjust;
 
     // Example:
     // We're trying to read: file_offset: 50, range_len: 100 (50 to 150)

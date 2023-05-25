@@ -1,4 +1,6 @@
 #pragma once
+#include <chrono>
+#include <fmt/chrono.h>
 #include <fmt/color.h>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
@@ -69,4 +71,23 @@ inline std::string string_join(const std::vector<std::string> &strings,
             result += delim;
     }
     return result;
+}
+
+inline std::chrono::time_point<std::chrono::system_clock> tnow()
+{
+    return std::chrono::high_resolution_clock::now();
+}
+
+constexpr std::chrono::microseconds
+tus(std::chrono::time_point<std::chrono::system_clock> start,
+    std::chrono::time_point<std::chrono::system_clock> end)
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+}
+
+constexpr int64_t tdus(std::chrono::time_point<std::chrono::system_clock> start,
+                       std::chrono::time_point<std::chrono::system_clock> end)
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+        .count();
 }

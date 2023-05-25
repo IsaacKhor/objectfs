@@ -58,5 +58,8 @@ objfs-mount
 s3.config
 secrets.md
 .env
+perf.svg
+perf.data
+perf.data.old
 
 venv/

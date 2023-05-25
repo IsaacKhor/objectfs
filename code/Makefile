@@ -1,13 +1,13 @@
 CC = gcc
 CXX = g++-12
-CXXFLAGS = -std=c++2b -fPIC -I../libs3/inc
+CXXFLAGS = -g3 -std=c++2b -fPIC -I../libs3/inc
 CXXLIBS = -lfuse -L../libs3/lib -ls3 -lfmt
 
 mount_path = /tmp/obfs-test
 
 debug: CXXFLAGS += -fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -fno-sanitize=null -fno-sanitize=alignment
 debug: CXXFLAGS += -Wall -Wextra -Wconversion -Wdouble-promotion -Wno-sign-conversion
-debug: CXXFLAGS += -g3 -DLOGLV=0
+debug: CXXFLAGS += -DLOGLV=0
 release: CXXFLAGS += -O3 -DLOGLV=2
 
 debug: objectfs

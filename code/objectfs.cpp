@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <future>
 #include <sys/stat.h>
 
@@ -61,6 +62,7 @@ void ObjectFS::apply_log_entry(LogObjectVar entry)
     std::visit(
         overloaded{
             [&](LogSetFileData *lo) {
+                // TODO set file extentmap
                 // noop for now
                 return;
             },
@@ -235,16 +237,35 @@ int ObjectFS::read_file(inum_t inum, size_t read_start_offset, size_t len,
     // else, then grab a write lock to modify extents. Only after the
     // extents are written do we delete the old data. This way, we don't
     // need to worry about the objects disappearing underneath us
+
     std::vector<std::pair<int64_t, ObjectSegment>> extents;
     {
         std::shared_lock<std::shared_mutex> lock(fsobj->mtx);
         extents = file.segments_in_range(read_start_offset, len);
     }
 
+    auto t0 = tnow();
+
+    // send backend requests in parallel
+    // std::vector<std::future<bool>> futs;
+    // for (auto &[file_extent_offset, segment] : extents) {
+    //     auto f = std::async(std::launch::async,
+    //     &ObjectBackend::get_obj_segment,
+    //                         &obj_backend, segment,
+    //                         buf + file_extent_offset - read_start_offset);
+    //     futs.push_back(std::move(f));
+    // }
+    // for (auto &f : futs)
+    //     f.get();
+
+    // send requests serially
     for (auto &[file_extent_offset, segment] : extents) {
         obj_backend.get_obj_segment(segment, buf + file_extent_offset -
                                                  read_start_offset);
     }
+
+    auto t1 = tnow();
+    // trace("segments {:2}: fetch {:6}us", extents.size(), tdus(t0, t1));
 
     return len;
 }

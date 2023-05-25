@@ -15,6 +15,10 @@ class S3ObjectStore
 {
   private:
     S3Wrap s3wrap;
+    S3BucketContext bucket_ctx;
+    S3ResponseHandler resp_handler;
+    std::string host, bucket, access, secret;
+    S3Protocol protocol;
 
   public:
     S3ObjectStore(std::string _host, std::string _bucket_name,
@@ -55,7 +59,7 @@ class ObjectBackend
     ~ObjectBackend();
 
     std::pair<std::vector<LogObjectVar>, std::unique_ptr<byte[]>>
-    fetch_and_parse_object(std::string);
+        fetch_and_parse_object(std::string);
 
     /**
      * Force a rollover and push to the backend of the current log. Will

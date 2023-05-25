@@ -9,10 +9,10 @@
  */
 class S3Wrap
 {
+  public:
     std::string host, bucket, access, secret;
     S3Protocol protocol;
 
-  public:
     S3Wrap(const char *_host, const char *_bucket, const char *_access,
            const char *_secret, bool encrypted)
         : host(_host), bucket(_bucket), access(_access), secret(_secret)
