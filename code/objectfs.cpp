@@ -25,24 +25,19 @@ ObjectFS::ObjectFS(S3ObjectStore s3)
     auto root = FSObject::create_directory(ROOT_DIR_INUM, ROOT_DIR_INUM, 0755);
     inodes.insert(ROOT_DIR_INUM, std::move(root));
 
-    std::vector<std::string> objects;
-    auto logobjs = s3.list("objectfs", objects);
-    if (logobjs != S3StatusOK) {
-        throw std::runtime_error("Failed to list objects in objectfs bucket");
-        return;
-    }
-
-    log_info("Found {} objects in objectfs bucket", objects.size());
+    auto logobjs = s3.list("objectfs");
+    log_info("Found {} objects in objectfs bucket", logobjs.size());
 
     // Make sure they are sorted in the proper order
-    std::sort(objects.begin(), objects.end());
+    std::sort(logobjs.begin(), logobjs.end(),
+              [](auto &a, auto &b) { return a.key < b.key; });
 
     auto replay_entries = 0;
     // TODO replay from latest checkpoint
-    for (auto &backend_obj_name : objects) {
-        debug("Replaying object {}", backend_obj_name);
+    for (auto &logobj : logobjs) {
+        debug("Replaying object {} (size {})", logobj.key, logobj.size);
         auto [log_entries, backing] =
-            obj_backend.fetch_and_parse_object(backend_obj_name);
+            obj_backend.fetch_and_parse_object(logobj);
 
         for (auto &entry : log_entries) {
             apply_log_entry(entry);
@@ -265,7 +260,7 @@ int ObjectFS::read_file(inum_t inum, size_t read_start_offset, size_t len,
     }
 
     auto t1 = tnow();
-    // trace("segments {:2}: fetch {:6}us", extents.size(), tdus(t0, t1));
+    trace("segments {:2}: fetch {:6}us", extents.size(), tdus(t0, t1));
 
     return len;
 }

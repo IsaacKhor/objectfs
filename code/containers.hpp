@@ -76,13 +76,13 @@ template <typename K, typename V> class ConcurrentMap
     std::map<K, V> map;
     std::shared_mutex mutex;
 
-    explicit ConcurrentMap(ConcurrentMap &other) = delete;
-    ConcurrentMap &operator=(ConcurrentMap &other) = delete;
-
   public:
     explicit ConcurrentMap() = default;
     explicit ConcurrentMap(ConcurrentMap &&other) = default;
     ConcurrentMap &operator=(ConcurrentMap &&other) = default;
+
+    explicit ConcurrentMap(ConcurrentMap &other) = delete;
+    ConcurrentMap &operator=(ConcurrentMap &other) = delete;
 
     V &at(const K &key)
     {

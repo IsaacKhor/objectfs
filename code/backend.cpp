@@ -148,18 +148,18 @@ void ObjectBackend::rollover_log()
 }
 
 std::pair<std::vector<LogObjectVar>, std::unique_ptr<byte[]>>
-ObjectBackend::fetch_and_parse_object(std::string obj_name)
+ObjectBackend::fetch_and_parse_object(S3ObjInfo obj_info)
 {
-    auto object_id = parse_obj_name(obj_name);
+    auto object_id = parse_obj_name(obj_info.key);
     if (object_id == std::nullopt) {
-        log_error("invalid object name {}", obj_name);
+        log_error("invalid object name {}", obj_info.key);
         throw std::runtime_error("invalid object id");
     }
 
     // Fetch the header to get the size of the log
-    auto buf = new std::byte[log_capacity];
+    auto buf = new std::byte[obj_info.size];
     std::unique_ptr<byte[]> buf_ptr(buf);
-    auto ret = s3.get(obj_name, 0, buf, sizeof(BackendObjectHeader));
+    auto ret = s3.get(obj_info.key, 0, buf, obj_info.size);
     if (ret != S3StatusOK)
         throw std::runtime_error("failed to fetch object from backend");
 
@@ -172,9 +172,6 @@ ObjectBackend::fetch_and_parse_object(std::string obj_name)
 
     // Fetch the rest of the object
     auto log_length = hdr->len;
-    ret = s3.get(obj_name, 0, buf, log_length + sizeof(BackendObjectHeader));
-    if (ret != S3StatusOK)
-        throw std::runtime_error("failed to fetch object from backend");
 
     std::vector<LogObjectVar> logobjs;
     byte *log = buf + sizeof(BackendObjectHeader);
@@ -292,9 +289,7 @@ extern "C" void callback_resp_complete(S3Status status,
 S3ObjectStore::S3ObjectStore(std::string _host, std::string _bucket_name,
                              std::string _access_key, std::string _secret_key,
                              bool encrypted)
-    : s3wrap(_host.c_str(), _bucket_name.c_str(), _access_key.c_str(),
-             _secret_key.c_str(), encrypted),
-      host(_host), bucket(_bucket_name), access(_access_key),
+    : host(_host), bucket(_bucket_name), access(_access_key),
       secret(_secret_key),
       protocol(encrypted ? S3ProtocolHTTPS : S3ProtocolHTTP)
 {
@@ -313,9 +308,14 @@ S3ObjectStore::S3ObjectStore(std::string _host, std::string _bucket_name,
         .propertiesCallback = callback_resp_props,
         .completeCallback = callback_resp_complete,
     };
+
+    S3_initialize("objectfs", S3_INIT_ALL, host.c_str());
 }
 
-S3ObjectStore::~S3ObjectStore() {}
+S3ObjectStore::~S3ObjectStore()
+{
+    // S3_deinitialize();
+}
 
 struct S3CallbackCtx {
     S3Status request_status;
@@ -377,27 +377,110 @@ S3Status S3ObjectStore::get(std::string key, size_t offset, void *buf,
         .transferred_len = 0,
     };
 
+    // trace("fetching: key={}, offset={}, len={}", key, offset, len);
     S3_get_object(&bucket_ctx, key.c_str(), NULL, offset, len, NULL, 0, &h,
                   &ctx);
 
     return ctx.request_status;
 }
 
-S3Status S3ObjectStore::put(std::string key, void *buf, size_t len)
+extern "C" int send_data_cb(int size, char *buf, void *data)
 {
-    iovec iov = {.iov_base = buf, .iov_len = len};
-    return s3wrap.s3_put(key, &iov, 1);
+    auto ctx = static_cast<S3CallbackCtx *>(data);
+    memcpy(buf, ctx->buf + ctx->transferred_len, size);
+    ctx->transferred_len += size;
+    return size;
 }
 
-S3Status S3ObjectStore::del(std::string key) { return s3wrap.s3_delete(key); }
-
-S3Status S3ObjectStore::list(std::string prefix, std::vector<std::string> &keys)
+S3Status S3ObjectStore::put(std::string key, void *buf, size_t len)
 {
-    std::list<std::string> keys_list;
-    S3Status status = s3wrap.s3_list(prefix, keys_list);
-    if (status != S3StatusOK)
-        return status;
+    S3PutObjectHandler h = {
+        .responseHandler = resp_handler,
+        .putObjectDataCallback = send_data_cb,
+    };
 
-    keys = std::vector<std::string>(keys_list.begin(), keys_list.end());
-    return S3StatusOK;
+    S3CallbackCtx ctx = {
+        .request_status = S3StatusOK,
+        .buf = buf,
+        .requested_len = len,
+        .transferred_len = 0,
+    };
+
+    S3_put_object(&bucket_ctx, key.c_str(), len, NULL, NULL, 0, &h, &ctx);
+    return ctx.request_status;
+}
+
+S3Status S3ObjectStore::del(std::string key)
+{
+    S3CallbackCtx ctx = {
+        .request_status = S3StatusOK,
+        .buf = nullptr,
+        .requested_len = 0,
+        .transferred_len = 0,
+    };
+
+    S3_delete_object(&bucket_ctx, key.c_str(), nullptr, 0, &resp_handler, &ctx);
+    return ctx.request_status;
+}
+
+struct S3ListCallbackCtx {
+    S3Status status;
+    bool truncated;
+    std::string next_marker;
+    std::vector<S3ObjInfo> objs;
+};
+
+std::vector<S3ObjInfo> S3ObjectStore::list(std::string prefix)
+{
+    S3ListBucketHandler h = {
+        .responseHandler = {
+            .propertiesCallback =
+                [](const S3ResponseProperties *p, void *data) {
+                    // no-op
+                    return S3StatusOK;
+                },
+            .completeCallback =
+                [](S3Status status, const S3ErrorDetails *error, void *data) {
+                    auto ctx = static_cast<S3ListCallbackCtx *>(data);
+                    ctx->status = status;
+                },
+        },
+        .listBucketCallback =
+            [](int isTruncated, const char *nextMarker, int contentsCount,
+               const S3ListBucketContent *contents, int commonPrefixesCount,
+               const char **commonPrefixes, void *callbackData) {
+                auto ctx = static_cast<S3ListCallbackCtx *>(callbackData);
+
+                ctx->truncated = isTruncated != 0;
+                if (nextMarker != NULL)
+                    ctx->next_marker = std::string(nextMarker);
+
+                for (int i = 0; i < contentsCount; i++) {
+                    ctx->objs.push_back(S3ObjInfo{
+                        .key = std::string(contents[i].key),
+                        .size = contents[i].size,
+                    });
+                }
+                return S3StatusOK;
+            },
+    };
+
+    S3ListCallbackCtx ctx = {
+        .status = S3StatusOK,
+        .truncated = false,
+        .next_marker = "",
+        .objs = {},
+    };
+
+    do {
+        S3_list_bucket(&bucket_ctx, "", ctx.next_marker.c_str(), nullptr, 0,
+                       nullptr, 0, &h, &ctx);
+    } while (ctx.truncated && ctx.status == S3StatusOK);
+
+    if (ctx.status != S3StatusOK) {
+        log_error("S3 error: {}", ctx.status);
+        throw std::runtime_error(fmt::format("S3.list error: {}", ctx.status));
+    }
+
+    return ctx.objs;
 }

@@ -23,7 +23,7 @@ all: release
 %.o: %.cpp *.hpp
 	$(CXX) -c $< $(CXXFLAGS) -o $@
 
-objectfs: backend.o objectfs.o models.o s3wrap.o fuse_interface.o
+objectfs: backend.o objectfs.o models.o fuse_interface.o gc.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(CXXLIBS)
 
 .PHONY: clean run-debug run-release

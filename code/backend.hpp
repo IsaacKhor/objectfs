@@ -1,20 +1,24 @@
 #pragma once
 
+#include <expected>
 #include <iterator>
 #include <libs3.h>
 #include <string>
 #include <vector>
 
 #include "models.hpp"
-#include "s3wrap.hpp"
 
 // 'objectfs' = ['0x6f', '0x62', '0x6a', '0x65', '0x63', '0x74', '0x66', '0x73']
 const uint64_t OBJECTFS_MAGIC = 0x73667463656a626f;
 
+struct S3ObjInfo {
+    std::string key;
+    uint64_t size;
+};
+
 class S3ObjectStore
 {
   private:
-    S3Wrap s3wrap;
     S3BucketContext bucket_ctx;
     S3ResponseHandler resp_handler;
     std::string host, bucket, access, secret;
@@ -29,7 +33,12 @@ class S3ObjectStore
     S3Status get(std::string key, size_t offset, void *buf, size_t len);
     S3Status put(std::string key, void *buf, size_t len);
     S3Status del(std::string key);
-    S3Status list(std::string prefix, std::vector<std::string> &keys);
+
+    /**
+     * List all keys in the bucket. Blocks until we're done and throws if the
+     * request failed.
+     */
+    std::vector<S3ObjInfo> list(std::string prefix);
 };
 
 class ObjectBackend
@@ -59,7 +68,7 @@ class ObjectBackend
     ~ObjectBackend();
 
     std::pair<std::vector<LogObjectVar>, std::unique_ptr<byte[]>>
-        fetch_and_parse_object(std::string);
+        fetch_and_parse_object(S3ObjInfo);
 
     /**
      * Force a rollover and push to the backend of the current log. Will
