@@ -13,10 +13,6 @@ const size_t LOG_ROLLOVER_BYTES = 10 * 1024 * 1024;
 
 const inum_t ROOT_DIR_INUM = 1;
 
-template <class... Ts> struct overloaded : Ts... {
-    using Ts::operator()...;
-};
-
 ObjectFS::ObjectFS(S3ObjectStore s3)
     : s3(s3), obj_backend(s3, CACHE_ENTRIES_SIZE, LOG_CAPACITY_BYTES,
                           LOG_ROLLOVER_BYTES)
@@ -57,9 +53,13 @@ void ObjectFS::apply_log_entry(LogObjectVar entry)
     std::visit(
         overloaded{
             [&](LogSetFileData *lo) {
-                // TODO set file extentmap
-                // noop for now
-                return;
+                auto &file = inodes.get_copy(lo->inode_num).value()->get_file();
+                ObjectSegment seg = {
+                    .object_id = lo->data_obj_id,
+                    .offset = lo->data_obj_offset,
+                    .len = lo->data_len,
+                };
+                file.insert_segment(lo->file_offset, seg);
             },
             [&](LogTruncateFile *lo) {
                 auto &file = inodes.get_copy(lo->inode_num).value()->get_file();

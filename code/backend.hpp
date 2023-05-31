@@ -62,6 +62,10 @@ class ObjectBackend
     std::string get_obj_name(objectid_t id);
     std::optional<objectid_t> parse_obj_name(std::string name);
 
+    ObjectSegment append_fixed(size_t len, void *buf);
+    ObjectSegment append_fixed_2(size_t len1, void *buf1, size_t len2,
+                                 void *buf2);
+
   public:
     explicit ObjectBackend(S3ObjectStore s3, size_t cache_size,
                            size_t log_capacity, size_t log_rollover_threshold);
@@ -92,10 +96,13 @@ class ObjectBackend
      * Append a log operation to the log. This returns the raw object segment
      * (including the object header) where the log object itself was written
      * to on the log.
-     *
-     * This is a bit of a hack, but for structs with variable sized components
-     * we pass them in separately to prevent redundant copying. Should rewrite
-     * it to something cleaner later.
+     * 
+     * How this works is that the Log___ object is partially constructed by the
+     * caller of the functions, and then the object is fully constructed
+     * in-place on the log itself. We do it this way to prevent redundant
+     * copying and to make it easier to append variable sized log objects.
+     * 
+     * Not the cleanest implementation, should rewrite it later.
      */
     ObjectSegment append_logobj(LogTruncateFile &logobj);
     ObjectSegment append_logobj(LogChangeFilePerms &logobj);
@@ -108,6 +115,9 @@ class ObjectBackend
     /**
      * Special method to append a LogSetFileData log object in-place to reduce
      * copying. Same as the other append_logobj's in all other aspects
+     * 
+     * Will fill in the data_obj_offset field in-place before appending
+     * to the log.
      *
      * When writing this to the file extent map for file write operations,
      * remember to offset by `offsetof` the correct struct field for the actual
@@ -116,8 +126,4 @@ class ObjectBackend
      */
     ObjectSegment append_logobj(LogSetFileData &logobj, size_t data_len,
                                 void *buf);
-
-    ObjectSegment append_fixed(size_t len, void *buf);
-    ObjectSegment append_fixed_2(size_t len1, void *buf1, size_t len2,
-                                 void *buf2);
 };

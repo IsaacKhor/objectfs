@@ -165,7 +165,7 @@ struct BackendObjectHeader {
 };
 
 enum class LogObjectType : uint8_t {
-    SetFileData = 1,
+    SetFileData = 7,
     TruncateFile,
     ChangeFilePermissions,
     ChangeFileOwners,
@@ -183,7 +183,10 @@ struct LogSetFileData {
     LogObjectType type;
     inum_t inode_num;
     size_t file_offset;
-    // size_t log_data_offset;
+    objectid_t data_obj_id;
+    // Raw offset to the data[] field in the object in which this log entry
+    // was found.
+    size_t data_obj_offset;
     size_t data_len;
     byte data[];
 };

@@ -34,6 +34,7 @@ class ObjectFS
     ObjectBackend obj_backend;
 
     std::atomic<inum_t> next_inode_num = 100;
+    std::atomic_bool should_continue_gc = true;
 
     /**
      * Resolve symlinks recursively, and if the target does not exist,
@@ -41,6 +42,10 @@ class ObjectFS
      */
     // FSObject *resolve_symlink_recur(FSObject *obj);
     inum_t allocate_inode_num();
+
+    void checkpoint();
+    void garbage_collect();
+    void save_live_entries(std::vector<LogObjectVar>);
 
   public:
     ObjectFS(S3ObjectStore s3);

@@ -264,7 +264,24 @@ ObjectSegment ObjectBackend::append_logobj(LogRemoveFile &logobj)
 ObjectSegment ObjectBackend::append_logobj(LogSetFileData &logobj, size_t len,
                                            void *data)
 {
-    return append_fixed_2(sizeof(LogSetFileData), &logobj, len, data);
+    ObjectSegment ret;
+    {
+        std::shared_lock<std::shared_mutex> lock(log_mutex);
+        ret.object_id = active_object_id;
+        ret.len = sizeof(logobj) + len;
+        ret.offset = log_len.fetch_add(ret.len);
+
+        // special fill in-place
+        logobj.data_obj_id = ret.object_id;
+        logobj.data_obj_offset =
+            ret.offset + offsetof(LogSetFileData, data);
+
+        memcpy(log + ret.offset, &logobj, sizeof(logobj));
+        memcpy(log + ret.offset + sizeof(logobj), data, len);
+    }
+
+    maybe_rollover();
+    return ret;
 }
 
 ObjectSegment ObjectBackend::append_logobj(LogMakeDirectory &logobj,

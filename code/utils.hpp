@@ -47,6 +47,10 @@
                        __func__, ##__VA_ARGS__);                               \
     } while (0)
 
+template <class... Ts> struct overloaded : Ts... {
+    using Ts::operator()...;
+};
+
 inline std::vector<std::string> split_string_on_char(const std::string &s,
                                                      char delim)
 {
