@@ -1,4 +1,5 @@
 #pragma once
+#include <cassert>
 #include <chrono>
 #include <fmt/chrono.h>
 #include <fmt/color.h>
@@ -46,6 +47,23 @@
                        "[ERR {}:{} {}] " MSG "\n", __FILE__, __LINE__,         \
                        __func__, ##__VA_ARGS__);                               \
     } while (0)
+
+#ifndef NDEBUG
+#define ASSERT(condition, message)                                             \
+    do {                                                                       \
+        if (!(condition)) {                                                    \
+            fmt::print(stderr, fg(fmt::color::dark_red) | fmt::emphasis::bold, \
+                       "[ERR {}:{} {}] Assertion `" #condition                 \
+                       "` failed: {}\n",                                       \
+                       __FILE__, __LINE__, __func__, message);                 \
+            throw std::runtime_error("Assertion failed");                      \
+        }                                                                      \
+    } while (false)
+#else
+#define ASSERT(condition, message)                                             \
+    do {                                                                       \
+    } while (false)
+#endif
 
 template <class... Ts> struct overloaded : Ts... {
     using Ts::operator()...;

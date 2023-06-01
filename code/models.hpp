@@ -24,6 +24,11 @@ struct ObjectSegment {
     size_t len;
 };
 
+struct FileSegment {
+    size_t offset;
+    ObjectSegment seg;
+};
+
 class FSFile
 {
   private:
@@ -52,6 +57,13 @@ class FSFile
     void insert_segment(int64_t offset, ObjectSegment e);
     ssize_t truncate_to(size_t new_size);
     size_t size();
+
+    /**
+     * Get the list of all live <file_offset, len> pairs that are still alive
+     * in the given segment.
+     */
+    std::vector<std::pair<size_t, size_t>> get_live_range(size_t file_offset,
+                                                          ObjectSegment seg);
 };
 
 class FSDirectory

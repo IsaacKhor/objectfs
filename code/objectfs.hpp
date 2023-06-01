@@ -34,7 +34,11 @@ class ObjectFS
     ObjectBackend obj_backend;
 
     std::atomic<inum_t> next_inode_num = 100;
+
     std::atomic_bool should_continue_gc = true;
+    std::condition_variable gc_cv;
+    std::mutex gc_mutex;
+    std::thread gc_thread;
 
     /**
      * Resolve symlinks recursively, and if the target does not exist,
@@ -45,7 +49,8 @@ class ObjectFS
 
     void checkpoint();
     void garbage_collect();
-    void save_live_entries(std::vector<LogObjectVar>);
+    size_t calculate_live_bytes(objectid_t, std::vector<LogObjectVar> obj);
+    void save_live_entries(objectid_t, std::vector<LogObjectVar>);
 
   public:
     ObjectFS(S3ObjectStore s3);

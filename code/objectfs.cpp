@@ -10,8 +10,8 @@
 const size_t CACHE_ENTRIES_SIZE = 1000;
 const size_t LOG_CAPACITY_BYTES = 20 * 1024 * 1024;
 const size_t LOG_ROLLOVER_BYTES = 10 * 1024 * 1024;
-
 const inum_t ROOT_DIR_INUM = 1;
+const int GC_INTERVAL_SECONDS = 60;
 
 ObjectFS::ObjectFS(S3ObjectStore s3)
     : s3(s3), obj_backend(s3, CACHE_ENTRIES_SIZE, LOG_CAPACITY_BYTES,
@@ -29,6 +29,7 @@ ObjectFS::ObjectFS(S3ObjectStore s3)
               [](auto &a, auto &b) { return a.key < b.key; });
 
     auto replay_entries = 0;
+    objectid_t largest_objid = 16;
     // TODO replay from latest checkpoint
     for (auto &logobj : logobjs) {
         debug("Replaying object {} (size {})", logobj.key, logobj.size);
@@ -39,9 +40,35 @@ ObjectFS::ObjectFS(S3ObjectStore s3)
             apply_log_entry(entry);
             replay_entries++;
         }
+
+        auto id = obj_backend.parse_obj_name(logobj.key).value();
+        largest_objid = std::max(largest_objid, id);
     }
 
+    obj_backend.set_active_id(largest_objid + 1);
     log_info("Replayed {} entries, filesystem initialised", replay_entries);
+
+    gc_thread = std::thread([&] {
+        while (should_continue_gc.load()) {
+            std::unique_lock<std::mutex> lock(gc_mutex);
+            gc_cv.wait_for(lock, std::chrono::seconds(GC_INTERVAL_SECONDS));
+            garbage_collect();
+        }
+
+        log_info("Garbage collector shutting down");
+    });
+}
+
+ObjectFS::~ObjectFS()
+{
+    should_continue_gc.store(false);
+    gc_cv.notify_all();
+    gc_thread.join();
+
+    obj_backend.rollover_log();
+    // TODO write out a checkpoint
+
+    log_info("ObjectFS shutting down");
 }
 
 /**
@@ -104,14 +131,6 @@ void ObjectFS::apply_log_entry(LogObjectVar entry)
             },
         },
         entry);
-}
-
-ObjectFS::~ObjectFS()
-{
-    obj_backend.rollover_log();
-    // TODO write out a checkpoint
-
-    log_info("ObjectFS shutting down");
 }
 
 inum_t ObjectFS::allocate_inode_num() { return next_inode_num.fetch_add(1); }
@@ -260,7 +279,7 @@ int ObjectFS::read_file(inum_t inum, size_t read_start_offset, size_t len,
     }
 
     auto t1 = tnow();
-    trace("segments {:2}: fetch {:6}us", extents.size(), tdus(t0, t1));
+    // trace("segments {:2}: fetch {:6}us", extents.size(), tdus(t0, t1));
 
     return len;
 }

@@ -4,6 +4,7 @@
 #include <iterator>
 #include <libs3.h>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "models.hpp"
@@ -48,6 +49,10 @@ class ObjectBackend
     LRUCache<std::pair<objectid_t, size_t>, byte *> cache;
     ConcurrentMap<objectid_t, std::shared_ptr<byte[]>> pending_queue;
 
+    // GC
+    std::mutex collected_mtx;
+    std::unordered_set<objectid_t> collected_objs;
+
     // log
     objectid_t active_object_id = 16;
     std::byte *log;
@@ -60,7 +65,6 @@ class ObjectBackend
     bool cache_disabled = true;
 
     std::string get_obj_name(objectid_t id);
-    std::optional<objectid_t> parse_obj_name(std::string name);
 
     ObjectSegment append_fixed(size_t len, void *buf);
     ObjectSegment append_fixed_2(size_t len1, void *buf1, size_t len2,
@@ -71,6 +75,8 @@ class ObjectBackend
                            size_t log_capacity, size_t log_rollover_threshold);
     ~ObjectBackend();
 
+    inline void set_active_id(objectid_t id) { active_object_id = id; }
+
     std::pair<std::vector<LogObjectVar>, std::unique_ptr<byte[]>>
         fetch_and_parse_object(S3ObjInfo);
 
@@ -80,6 +86,17 @@ class ObjectBackend
      */
     void rollover_log();
     void maybe_rollover();
+
+    std::optional<objectid_t> parse_obj_name(std::string name);
+
+    /**
+     * Designates an object as having been collected by the garbage collector.
+     * This means that we can delete it from the backend the next time we
+     * write out a checkpoint, as that is the point at which changes to the
+     * inode map are persisted.
+     */
+    void add_collected_obj(objectid_t id);
+    bool is_collectable(objectid_t id);
 
     /**
      * Get a specific segment of an object. We first check the cache for the
@@ -96,12 +113,12 @@ class ObjectBackend
      * Append a log operation to the log. This returns the raw object segment
      * (including the object header) where the log object itself was written
      * to on the log.
-     * 
+     *
      * How this works is that the Log___ object is partially constructed by the
      * caller of the functions, and then the object is fully constructed
      * in-place on the log itself. We do it this way to prevent redundant
      * copying and to make it easier to append variable sized log objects.
-     * 
+     *
      * Not the cleanest implementation, should rewrite it later.
      */
     ObjectSegment append_logobj(LogTruncateFile &logobj);
@@ -115,7 +132,7 @@ class ObjectBackend
     /**
      * Special method to append a LogSetFileData log object in-place to reduce
      * copying. Same as the other append_logobj's in all other aspects
-     * 
+     *
      * Will fill in the data_obj_offset field in-place before appending
      * to the log.
      *

@@ -15,6 +15,18 @@ ObjectBackend::ObjectBackend(S3ObjectStore s3, size_t cache_size,
 
 ObjectBackend::~ObjectBackend() { delete[] log; }
 
+void ObjectBackend::add_collected_obj(objectid_t id)
+{
+    std::unique_lock<std::mutex> lock(collected_mtx);
+    collected_objs.insert(id);
+}
+
+bool ObjectBackend::is_collectable(objectid_t id)
+{
+    std::unique_lock<std::mutex> lock(collected_mtx);
+    return collected_objs.contains(id);
+}
+
 std::string ObjectBackend::get_obj_name(objectid_t id)
 {
     return fmt::format("objectfs_{:016x}.log", id);
@@ -273,8 +285,7 @@ ObjectSegment ObjectBackend::append_logobj(LogSetFileData &logobj, size_t len,
 
         // special fill in-place
         logobj.data_obj_id = ret.object_id;
-        logobj.data_obj_offset =
-            ret.offset + offsetof(LogSetFileData, data);
+        logobj.data_obj_offset = ret.offset + offsetof(LogSetFileData, data);
 
         memcpy(log + ret.offset, &logobj, sizeof(logobj));
         memcpy(log + ret.offset + sizeof(logobj), data, len);
