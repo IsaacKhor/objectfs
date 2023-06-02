@@ -154,7 +154,7 @@ std::expected<inum_t, int> ObjectFS::open_file(std::string path)
     return inode_num.value();
 }
 
-void ObjectFS::release_file(std::string path)
+void ObjectFS::release_file([[maybe_unused]] std::string path)
 {
     // noop for now
     // later consider retaining some time of reference count for files that
@@ -258,7 +258,7 @@ int ObjectFS::read_file(inum_t inum, size_t read_start_offset, size_t len,
         extents = file.segments_in_range(read_start_offset, len);
     }
 
-    auto t0 = tnow();
+    // auto t0 = tnow();
 
     // send backend requests in parallel
     // std::vector<std::future<bool>> futs;
@@ -278,10 +278,10 @@ int ObjectFS::read_file(inum_t inum, size_t read_start_offset, size_t len,
                                                  read_start_offset);
     }
 
-    auto t1 = tnow();
+    // auto t1 = tnow();
     // trace("segments {:2}: fetch {:6}us", extents.size(), tdus(t0, t1));
 
-    return len;
+    return (int)len;
 }
 
 int ObjectFS::write_file(inum_t inum, size_t offset, size_t len, byte *buf)
@@ -311,6 +311,8 @@ int ObjectFS::write_file(inum_t inum, size_t offset, size_t len, byte *buf)
             .type = LogObjectType::SetFileData,
             .inode_num = inum,
             .file_offset = offset,
+            .data_obj_id = 0,     // placeholder
+            .data_obj_offset = 0, // placeholder
             .data_len = len,
         };
         auto log_obj_seg = obj_backend.append_logobj(logobj, len, buf);
@@ -323,7 +325,7 @@ int ObjectFS::write_file(inum_t inum, size_t offset, size_t len, byte *buf)
         file.insert_segment(offset, data_seg);
     }
 
-    return len;
+    return (int)len;
 }
 
 int ObjectFS::truncate_file(std::string path, size_t new_size)
@@ -361,7 +363,8 @@ int ObjectFS::truncate_file(std::string path, size_t new_size)
     return 0;
 }
 
-int ObjectFS::sync_file(inum_t inum, bool data_only)
+int ObjectFS::sync_file([[maybe_unused]] inum_t inum,
+                        [[maybe_unused]] bool data_only)
 {
     /**
     auto fsobj_opt = inodes.get_copy(inum);

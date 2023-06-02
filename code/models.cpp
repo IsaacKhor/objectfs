@@ -44,7 +44,7 @@ FSFile::segments_in_range(int64_t file_offset, size_t range_len)
 
     while (it != extents_map.end()) {
         auto [extent_offset, extent_segment] = *it;
-        if (extent_offset >= file_offset + range_len)
+        if (extent_offset >= file_offset + (int64_t)range_len)
             break;
 
         res.push_back(*it);
@@ -88,7 +88,7 @@ void FSFile::insert_segment(int64_t offset, ObjectSegment e)
     // extending the last extent
     //
     auto [key, val] = *(--extents_map.end());
-    if (offset == key + val.len && e.offset == val.offset + val.len) {
+    if (offset == key + (int64_t)val.len && e.offset == val.offset + val.len) {
         val.len += e.len;
         extents_map[key] = val;
         return;
@@ -157,7 +157,7 @@ void FSFile::insert_segment(int64_t offset, ObjectSegment e)
         //       ++++++++++
         // = ----++++++++++
         //
-        else if (key < offset && key + val.len > offset) {
+        else if (key < offset && key + (int64_t)val.len > offset) {
             val.len = offset - key;
             extents_map[key] = val;
         }
@@ -169,7 +169,7 @@ void FSFile::insert_segment(int64_t offset, ObjectSegment e)
 ssize_t FSFile::truncate_to(size_t new_size)
 {
     for (auto &[offset, segment] : extents_map) {
-        if (offset >= new_size) {
+        if (offset >= (int64_t)new_size) {
             extents_map.erase(offset);
             continue;
         }

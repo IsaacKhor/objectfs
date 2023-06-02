@@ -119,6 +119,8 @@ void ObjectFS::save_live_entries(objectid_t objid,
                     .data_len = len,
                 };
 
+                // TODO actually modify the file extents
+
                 ASSERT(file_offset + len <= le->data_len, "live range too big");
 
                 auto live_obj_offset =

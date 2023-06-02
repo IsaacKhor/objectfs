@@ -353,8 +353,9 @@ struct S3CallbackCtx {
     std::optional<std::string> err_msg;
 };
 
-extern "C" S3Status callback_resp_props(const S3ResponseProperties *p,
-                                        void *data)
+extern "C" S3Status
+callback_resp_props([[maybe_unused]] const S3ResponseProperties *p,
+                    [[maybe_unused]] void *data)
 {
     // no-op
     return S3StatusOK;
@@ -385,7 +386,7 @@ extern "C" S3Status receive_data_cb(int size, const char *buf, void *data)
         return S3StatusAbortedByCallback;
     }
 
-    memcpy(ctx->buf + ctx->transferred_len, buf, size);
+    memcpy((char *)ctx->buf + ctx->transferred_len, buf, size);
     ctx->transferred_len += size;
     return S3StatusOK;
 }
@@ -403,6 +404,7 @@ S3Status S3ObjectStore::get(std::string key, size_t offset, void *buf,
         .buf = buf,
         .requested_len = len,
         .transferred_len = 0,
+        .err_msg = std::nullopt,
     };
 
     // trace("fetching: key={}, offset={}, len={}", key, offset, len);
@@ -415,7 +417,7 @@ S3Status S3ObjectStore::get(std::string key, size_t offset, void *buf,
 extern "C" int send_data_cb(int size, char *buf, void *data)
 {
     auto ctx = static_cast<S3CallbackCtx *>(data);
-    memcpy(buf, ctx->buf + ctx->transferred_len, size);
+    memcpy(buf, (char *)ctx->buf + ctx->transferred_len, size);
     ctx->transferred_len += size;
     return size;
 }
@@ -432,6 +434,7 @@ S3Status S3ObjectStore::put(std::string key, void *buf, size_t len)
         .buf = buf,
         .requested_len = len,
         .transferred_len = 0,
+        .err_msg = std::nullopt,
     };
 
     S3_put_object(&bucket_ctx, key.c_str(), len, NULL, NULL, 0, &h, &ctx);
@@ -445,6 +448,7 @@ S3Status S3ObjectStore::del(std::string key)
         .buf = nullptr,
         .requested_len = 0,
         .transferred_len = 0,
+        .err_msg = std::nullopt,
     };
 
     S3_delete_object(&bucket_ctx, key.c_str(), nullptr, 0, &resp_handler, &ctx);
@@ -463,20 +467,25 @@ std::vector<S3ObjInfo> S3ObjectStore::list(std::string prefix)
     S3ListBucketHandler h = {
         .responseHandler = {
             .propertiesCallback =
-                [](const S3ResponseProperties *p, void *data) {
+                []([[maybe_unused]] const S3ResponseProperties *p,
+                   [[maybe_unused]] void *data) {
                     // no-op
                     return S3StatusOK;
                 },
             .completeCallback =
-                [](S3Status status, const S3ErrorDetails *error, void *data) {
+                [](S3Status status,
+                   [[maybe_unused]] const S3ErrorDetails *error,
+                   [[maybe_unused]] void *data) {
                     auto ctx = static_cast<S3ListCallbackCtx *>(data);
                     ctx->status = status;
                 },
         },
         .listBucketCallback =
             [](int isTruncated, const char *nextMarker, int contentsCount,
-               const S3ListBucketContent *contents, int commonPrefixesCount,
-               const char **commonPrefixes, void *callbackData) {
+               const S3ListBucketContent *contents,
+               [[maybe_unused]] int commonPrefixesCount,
+               [[maybe_unused]] const char **commonPrefixes,
+               void *callbackData) {
                 auto ctx = static_cast<S3ListCallbackCtx *>(callbackData);
 
                 ctx->truncated = isTruncated != 0;
@@ -501,8 +510,8 @@ std::vector<S3ObjInfo> S3ObjectStore::list(std::string prefix)
     };
 
     do {
-        S3_list_bucket(&bucket_ctx, "", ctx.next_marker.c_str(), nullptr, 0,
-                       nullptr, 0, &h, &ctx);
+        S3_list_bucket(&bucket_ctx, prefix.c_str(), ctx.next_marker.c_str(),
+                       nullptr, 0, nullptr, 0, &h, &ctx);
     } while (ctx.truncated && ctx.status == S3StatusOK);
 
     if (ctx.status != S3StatusOK) {

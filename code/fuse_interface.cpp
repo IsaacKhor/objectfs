@@ -35,6 +35,13 @@ int fs_open(const char *path, struct fuse_file_info *fi)
     }
 }
 
+int fs_release(const char *path, struct fuse_file_info *fi)
+{
+    auto ofs = static_cast<ObjectFS *>(fuse_get_context()->private_data);
+    ofs->release_file(path);
+    return 0;
+}
+
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     auto ofs = static_cast<ObjectFS *>(fuse_get_context()->private_data);
@@ -151,7 +158,8 @@ int fs_opendir(const char *path, struct fuse_file_info *fi)
 }
 
 int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-               off_t offset, struct fuse_file_info *fi)
+               [[maybe_unused]] off_t offset,
+               [[maybe_unused]] struct fuse_file_info *fi)
 {
     auto ofs = static_cast<ObjectFS *>(fuse_get_context()->private_data);
     auto res = ofs->list_directory(path);
@@ -163,9 +171,9 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
             .st_uid = entry.uid,
             .st_gid = entry.gid,
             .st_size = (long)entry.size,
-            .st_atim = 0,
-            .st_mtim = 0,
-            .st_ctim = 0,
+            .st_atim = {0, 0},
+            .st_mtim = {0, 0},
+            .st_ctim = {0, 0},
         };
         auto has_space = filler(buf, entry.name.c_str(), &st, 0);
         if (has_space != 0)
@@ -175,7 +183,8 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return 0;
 }
 
-int fs_utimens(const char *path, const struct timespec tv[2])
+int fs_utimens([[maybe_unused]] const char *path,
+               [[maybe_unused]] const struct timespec tv[2])
 {
     // noop
     return 0;
@@ -201,7 +210,7 @@ struct fuse_operations fs_ops = {
     .write = fs_write,
     .statfs = fs_statfs,
     .flush = nullptr,
-    .release = nullptr, // TODO
+    .release = fs_release,
     .fsync = fs_fsync,
     .setxattr = nullptr,
     .getxattr = nullptr,
@@ -227,6 +236,7 @@ struct fuse_operations fs_ops = {
     .ioctl = nullptr,
     .poll = nullptr,
     .write_buf = nullptr,
+    .read_buf = nullptr,
     .flock = nullptr,
     .fallocate = nullptr,
     // .copy_file_range = nullptr,
